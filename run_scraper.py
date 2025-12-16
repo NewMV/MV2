@@ -45,8 +45,8 @@ except Exception as e:
 
 # --- WRITING TARGET (New MV2, sheet1) ---
 try:
-    sheet_data = gc.open('New MV2').worksheet('sheet1')
-    print(f"✅ Target sheet set to: 'New MV2' -> 'sheet1'")
+    sheet_data = gc.open('New MV2').worksheet('Sheet1')
+    print(f"✅ Target sheet set to: 'New MV2' -> 'Sheet1'")
 except Exception as e:
     print(f"❌ Error opening new sheet/worksheet: {e}")
     exit(1)
