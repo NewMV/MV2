@@ -35,8 +35,8 @@ chrome_options.add_argument("--remote-debugging-port=9222")
 # ---------------- GOOGLE SHEETS AUTH ---------------- #
 try:
     gc = gspread.service_account("credentials.json")
-    sheet_data = gc.open('New MV2').worksheet('Sheet5')
-    print("✅ Google Sheets connected successfully")
+    sheet_data = gc.open('New MV2').worksheet('Sheet5')  # ✅ Sheet5
+    print("✅ Connected to Google Sheet: Sheet5")
 except Exception as e:
     print(f"❌ Error loading credentials.json: {e}")
     exit(1)
@@ -50,8 +50,8 @@ try:
     response.raise_for_status()
 
     df = pd.read_excel(BytesIO(response.content), engine="openpyxl")
-    name_list = df.iloc[:, 0].fillna("").tolist()   # Column A - Name
-    company_list = df.iloc[:, 3].fillna("").tolist()  # Column E - URL
+    name_list = df.iloc[:, 0].fillna("").tolist()        # Column A - Name
+    company_list = df.iloc[:, 3].fillna("").tolist()    # Column E - URL
 
     print(f"✅ Loaded {len(company_list)} companies from GitHub Excel.")
 except Exception as e:
@@ -62,74 +62,94 @@ current_date = date.today().strftime("%m/%d/%Y")
 
 # ---------------- SCRAPER FUNCTION ---------------- #
 def scrape_tradingview(company_url):
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+    driver = webdriver.Chrome(
+        service=Service(ChromeDriverManager().install()),
+        options=chrome_options
+    )
     driver.set_window_size(1920, 1080)
+
     try:
         # LOGIN USING SAVED COOKIES
         if os.path.exists("cookies.json"):
             driver.get("https://www.tradingview.com/")
             with open("cookies.json", "r", encoding="utf-8") as f:
                 cookies = json.load(f)
+
             for cookie in cookies:
                 try:
-                    cookie_to_add = {k: cookie[k] for k in ('name', 'value', 'domain', 'path') if k in cookie}
+                    cookie_to_add = {
+                        k: cookie[k]
+                        for k in ('name', 'value', 'domain', 'path')
+                        if k in cookie
+                    }
                     cookie_to_add['secure'] = cookie.get('secure', False)
                     cookie_to_add['httpOnly'] = cookie.get('httpOnly', False)
                     driver.add_cookie(cookie_to_add)
                 except Exception:
                     pass
+
             driver.refresh()
             time.sleep(2)
         else:
-            print("⚠️ cookies.json not found. Proceeding without login may limit data.")
+            print("⚠️ cookies.json not found. Continuing without login.")
 
         driver.get(company_url)
-        print(f"🔎 Visiting URL: {company_url}")
+        print(f"🔎 Visiting: {company_url}")
+
         WebDriverWait(driver, 45).until(
-            EC.visibility_of_element_located((By.XPATH,
-                '/html/body/div[2]/div/div[5]/div/div[1]/div/div[2]/div[1]/div[2]/div/div[1]/div[2]/div[2]/div[2]/div[2]/div'))
+            EC.visibility_of_element_located(
+                (By.XPATH,
+                 '/html/body/div[2]/div/div[5]/div/div[1]/div/div[2]/div[1]/div[2]/div/div[1]/div[2]/div[2]/div[2]/div[2]/div')
+            )
         )
 
         soup = BeautifulSoup(driver.page_source, "html.parser")
         values = [
             el.get_text().replace('−', '-').replace('∅', '').strip()
-            for el in soup.find_all("div", class_="valueValue-l31H9iuA apply-common-tooltip")
+            for el in soup.find_all(
+                "div",
+                class_="valueValue-l31H9iuA apply-common-tooltip"
+            )
         ]
-        print(f"✅ Scraped values: {values}")
+
+        print(f"✅ Scraped {len(values)} values")
         return values
 
     except NoSuchElementException:
-        print(f"⚠️ Data element not found for URL: {company_url}")
+        print(f"⚠️ Data element not found: {company_url}")
         return []
     except Exception as e:
-        print(f"❌ An error occurred during scraping for {company_url}: {e}")
+        print(f"❌ Scraping error for {company_url}: {e}")
         return []
     finally:
         driver.quit()
 
 # ---------------- MAIN LOOP ---------------- #
 for i, company_url in enumerate(company_list[last_i:], last_i):
+
     if i < START_INDEX or i > END_INDEX:
         continue
+
     if i % SHARD_STEP != SHARD_INDEX:
         continue
 
     name = name_list[i] if i < len(name_list) else f"Row {i}"
-    print(f"📌 Scraping {i}: {name} | {company_url}")
+    print(f"\n📌 Index {i} | {name}")
 
     values = scrape_tradingview(company_url)
+
     if values:
         row = [name, current_date] + values
         try:
-            sheet_data.append_row(row, table_range='A1')
-            print(f"✅ Successfully saved data for {name}.")
+            sheet_data.append_row(row, table_range='A1')  # ✅ Column A
+            print(f"💾 Saved to Sheet5 → {name}")
         except Exception as e:
-            print(f"⚠️ Failed to append for {name}: {e}")
+            print(f"⚠️ Google Sheets error for {name}: {e}")
     else:
-        print(f"⚠️ Skipping {name}: No data scraped.")
+        print(f"⚠️ No data scraped for {name}")
 
     with open(checkpoint_file, "w") as f:
         f.write(str(i))
-        print(f"💾 Checkpoint updated: {i}")
+        print(f"🧾 Checkpoint updated → {i}")
 
     time.sleep(1)
