@@ -1,13 +1,9 @@
 name: TradingView Data Scraper
 
 on:
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
-  # Sets the workflow to run on a schedule (e.g., daily at 00:00 UTC)
   schedule:
-    - cron: '0 0 * * *' 
-  # push:
-  #   branches: [ main ]
+    - cron: '0 0 * * *'
 
 jobs:
   scrape_and_upload:
@@ -25,28 +21,22 @@ jobs:
       - name: 3. Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Install all required libraries, including webdriver-manager and gspread
           pip install pandas requests gspread selenium beautifulsoup4 openpyxl webdriver-manager
 
       - name: 4. Create secrets files (Credentials & Cookies)
         run: |
-          # Creates the credentials.json file from the secret
-          echo '${{ secrets.GSPREAD_CREDENTIALS }}' > credentials.json
-          
-          # Creates the cookies.json file from the secret (required for login)
-          echo '${{ secrets.TRADINGVIEW_COOKIES }}' > cookies.json
+          echo "$GSPREAD_CREDENTIALS" > credentials.json
+          echo "$TRADINGVIEW_COOKIES" > cookies.json
         env:
-          # Define required secrets which must be set in your GitHub repository secrets
           GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
           TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
 
       - name: 5. Execute the Python Scraper (Limited Test Run)
-        run: python run_scraper.py
-        # Pass environment variables to control the range
+        run: |
+          export PYTHONUNBUFFERED=1
+          python -X faulthandler run_scraper.py
         env:
-          # --- MODIFICATION START ---
-          START_INDEX: 1        # Start at row 1 (the first stock after headers)
-          END_INDEX: 40         # Stop after row 40 (limits the scrape to 40 stocks)
-          # --- MODIFICATION END ---
-          SHARD_INDEX: 0 
+          START_INDEX: 1
+          END_INDEX: 40
+          SHARD_INDEX: 0
           SHARD_STEP: 1
