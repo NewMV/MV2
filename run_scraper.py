@@ -17,7 +17,43 @@ from io import BytesIO
 from webdriver_manager.chrome import ChromeDriverManager
 import random
 
-# ... (SHARDING and SETUP blocks remain unchanged) ...
+# ---------------- SHARDING (env-driven) ---------------- #
+# Keeping this logic intact for future multi-job use
+SHARD_INDEX = int(os.getenv("SHARD_INDEX", "0"))
+SHARD_STEP = int(os.getenv("SHARD_STEP", "1"))
+START_INDEX = int(os.getenv("START_INDEX", "1"))
+END_INDEX = int(os.getenv("END_INDEX", "2500"))
+checkpoint_file = os.getenv("CHECKPOINT_FILE", "checkpoint_new_1.txt")
+
+# Define last_i before first use in the code
+last_i = 0 
+try:
+    if os.path.exists(checkpoint_file):
+        with open(checkpoint_file, 'r') as f:
+            content = f.read().strip()
+            # Ensure checkpoint value is an integer and within valid bounds
+            if content.isdigit():
+                last_i = int(content)
+                if last_i < START_INDEX:
+                    last_i = START_INDEX
+            else:
+                last_i = START_INDEX
+    else:
+        last_i = START_INDEX
+except Exception as e:
+    print(f"⚠️ Warning: Checkpoint file reading error: {e}. Starting from index {START_INDEX}.")
+    last_i = START_INDEX
+
+
+# ---------------- SETUP ---------------- #
+chrome_options = Options()
+chrome_options.add_argument("--headless=new")
+chrome_options.add_argument("--disable-gpu")
+chrome_options.add_argument("--no-sandbox")
+chrome_options.add_argument("--disable-dev-shm-usage")
+chrome_options.add_argument("--remote-debugging-port=9222")
+chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+
 
 # ---------------- GOOGLE SHEETS AUTH ---------------- #
 try:
@@ -31,29 +67,26 @@ except Exception as e:
 SPREADSHEET_NAME = 'New MV2'
 WORKSHEET_NAME = 'Sheet1'
 try:
-    # Attempt to open the specific sheet
     spreadsheet = gc.open(SPREADSHEET_NAME)
     sheet_data = spreadsheet.worksheet(WORKSHEET_NAME)
     print(f"✅ Target sheet set to: '{SPREADSHEET_NAME}' -> '{WORKSHEET_NAME}'")
 except gspread.exceptions.SpreadsheetNotFound:
+    # Trigger image to help user fix permissions/typo
     print(f"❌ ERROR: Spreadsheet not found. Check name/sharing: '{SPREADSHEET_NAME}'")
-    # This is often caused by missing sharing permissions. 
+    
     exit(1)
 except gspread.exceptions.WorksheetNotFound:
     print(f"❌ ERROR: Worksheet not found inside '{SPREADSHEET_NAME}'. Check name: '{WORKSHEET_NAME}'")
     exit(1)
 except Exception as e:
-    # Catches the generic <Response 200> error, but now provides context
     print(f"❌ FATAL ERROR: Failed to open sheet/worksheet. Check permissions/typos. Details: {e}")
     exit(1)
 
 
 # ---------------- READ STOCK LIST FROM GITHUB EXCEL ---------------- #
-# ... (This block remains unchanged as it is highly robust) ...
 print("📥 Fetching stock list from GitHub Excel...")
 
 try:
-    # --- UPDATED RAW URL ---
     EXCEL_URL ="https://raw.githubusercontent.com/NewMV/MV2/main/Stock%20List%20.xlsx" 
     response = requests.get(EXCEL_URL)
     response.raise_for_status()
@@ -73,7 +106,6 @@ current_date = date.today().strftime("%m/%d/%Y")
 def scrape_tradingview(company_url):
     driver = None
     try:
-        # Explicitly log driver setup
         print("⚙️ Setting up Chrome driver...")
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
         driver.set_window_size(1920, 1080)
@@ -135,8 +167,9 @@ def scrape_tradingview(company_url):
             driver.quit()
 
 # ---------------- MAIN LOOP ---------------- #
+# FIX APPLIED HERE: Correct syntax for list slicing: company_list[last_i:]
 for i, company_url in enumerate(company_list[last_i:], last_i):
-    # ... (Sharding/index checks remain unchanged) ...
+    # Sharding logic ensures only assigned segment runs
     if i < START_INDEX or i > END_INDEX:
         continue
     if i % SHARD_STEP != SHARD_INDEX:
@@ -152,12 +185,10 @@ for i, company_url in enumerate(company_list[last_i:], last_i):
         row = [name, current_date, ""] + values
         
         try:
-            # Explicitly log GSpread attempt
             print(f"☁️ Attempting to append data to Google Sheet...")
             sheet_data.append_row(row, table_range='A1')
             print(f"✅ Successfully scraped and saved data for {name}.")
         except Exception as e:
-            # Catch GSpread append errors (e.g., API limits)
             print(f"⚠️ FAILED to append data for {name}. GSpread Error: {e}")
             
     else:
