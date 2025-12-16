@@ -24,7 +24,7 @@ START_INDEX = int(os.getenv("START_INDEX", "1"))
 END_INDEX = int(os.getenv("END_INDEX", "2500"))
 checkpoint_file = os.getenv("CHECKPOINT_FILE", "checkpoint_new_1.txt")
 
-# --- CRITICAL FIX: Robust checkpoint loading to prevent silent crashes ---
+# --- CRITICAL FIX: Robust checkpoint loading to prevent silent crashes (NEW LOGIC) ---
 last_i = START_INDEX 
 try:
     if os.path.exists(checkpoint_file):
@@ -63,7 +63,7 @@ except Exception as e:
 
 # --- WRITING TARGET (New MV2, sheet1) ---
 SPREADSHEET_NAME = 'New MV2'
-WORKSHEET_NAME = 'Sheet1'
+WORKSHEET_NAME = 'sheet1'
 try:
     spreadsheet = gc.open(SPREADSHEET_NAME)
     sheet_data = spreadsheet.worksheet(WORKSHEET_NAME)
@@ -170,6 +170,7 @@ def scrape_tradingview(company_url):
             driver.quit()
 
 # ---------------- MAIN LOOP ---------------- #
+# This uses the safely determined last_i from the new block above
 for i, company_url in enumerate(company_list[last_i:], last_i):
     if i < START_INDEX or i > END_INDEX:
         continue
