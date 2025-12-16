@@ -35,7 +35,7 @@ chrome_options.add_argument("--remote-debugging-port=9222")
 # ---------------- GOOGLE SHEETS AUTH ---------------- #
 try:
     gc = gspread.service_account("credentials.json")
-    sheet_data = gc.open('New MV2').worksheet('Sheet1')
+    sheet_data = gc.open('New MV2').worksheet('Sheet5')
     print("✅ Google Sheets connected successfully")
 except Exception as e:
     print(f"❌ Error loading credentials.json: {e}")
