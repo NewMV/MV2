@@ -23,7 +23,24 @@ SHARD_STEP = int(os.getenv("SHARD_STEP", "1"))
 START_INDEX = int(os.getenv("START_INDEX", "1"))
 END_INDEX = int(os.getenv("END_INDEX", "2500"))
 checkpoint_file = os.getenv("CHECKPOINT_FILE", "checkpoint_new_1.txt")
-last_i = int(open(checkpoint_file).read()) if os.path.exists(checkpoint_file) else START_INDEX
+
+# --- CRITICAL FIX: Robust checkpoint loading to prevent silent crashes ---
+last_i = START_INDEX 
+try:
+    if os.path.exists(checkpoint_file):
+        with open(checkpoint_file, 'r') as f:
+            content = f.read().strip()
+            if content.isdigit():
+                last_i = int(content)
+                # Ensure we start at least at START_INDEX
+                if last_i < START_INDEX:
+                    last_i = START_INDEX
+except Exception as e:
+    # This print ensures we get output even if file access fails
+    print(f"❌ FATAL CHECKPOINT ERROR: Failed to read/access '{checkpoint_file}'. Error: {e}. Starting from index {START_INDEX}.")
+    last_i = START_INDEX
+# --- END CRITICAL FIX ---
+
 
 # ---------------- SETUP ---------------- #
 chrome_options = Options()
@@ -46,7 +63,7 @@ except Exception as e:
 
 # --- WRITING TARGET (New MV2, sheet1) ---
 SPREADSHEET_NAME = 'New MV2'
-WORKSHEET_NAME = 'Sheet1'
+WORKSHEET_NAME = 'sheet1'
 try:
     spreadsheet = gc.open(SPREADSHEET_NAME)
     sheet_data = spreadsheet.worksheet(WORKSHEET_NAME)
