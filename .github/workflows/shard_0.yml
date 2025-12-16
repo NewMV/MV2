@@ -1,13 +1,14 @@
-name: TradingView Data Scraper
+name: TradingView Scraper - Shard 0 (1-1250)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 0 * * *' # Runs daily at 00:00 UTC
 
 jobs:
-  scrape_and_upload:
+  scrape_shard_0:
     runs-on: ubuntu-latest
+    timeout-minutes: 60 # Set a maximum runtime for safety
 
     steps:
       - name: 1. Checkout repository code
@@ -25,18 +26,18 @@ jobs:
 
       - name: 4. Create secrets files (Credentials & Cookies)
         run: |
-          echo "$GSPREAD_CREDENTIALS" > credentials.json
-          echo "$TRADINGVIEW_COOKIES" > cookies.json
+          echo '${{ secrets.GSPREAD_CREDENTIALS }}' > credentials.json
+          echo '${{ secrets.TRADINGVIEW_COOKIES }}' > cookies.json
         env:
           GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
           TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
 
-      - name: 5. Execute the Python Scraper (Limited Test Run)
-        run: |
-          export PYTHONUNBUFFERED=1
-          python -X faulthandler run_scraper.py
+      - name: 5. Execute Python Scraper (SHARD 0)
+        run: python run_scraper.py
         env:
+          # --- SHARDING CONFIGURATION ---
           START_INDEX: 1
-          END_INDEX: 40
-          SHARD_INDEX: 0
+          END_INDEX: 1250    # Scrapes up to row 1250
+          SHARD_INDEX: 0     # Not using SHARD_INDEX/STEP in this split, but keeping the variables for consistency
           SHARD_STEP: 1
+          CHECKPOINT_FILE: checkpoint_shard_0.txt # Unique checkpoint file for this job
