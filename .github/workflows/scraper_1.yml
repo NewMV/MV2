@@ -1,0 +1,44 @@
+name: TradingView Scraper Batch 1
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests gspread selenium beautifulsoup4 openpyxl webdriver-manager
+
+      - name: Create secrets files
+        run: |
+          echo "$GSPREAD_CREDENTIALS" > credentials.json
+          echo "$TRADINGVIEW_COOKIES" > cookies.json
+        env:
+          GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+          TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
+
+      - name: Run scraper
+        run: |
+          export PYTHONUNBUFFERED=1
+          python -X faulthandler run_scraper.py
+        env:
+          START_INDEX: 1
+          END_INDEX: 2500
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_STEP: 40
