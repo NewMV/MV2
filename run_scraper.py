@@ -45,7 +45,8 @@ sheet_data = gc.open('New MV2').worksheet('Sheet1')
 print("📥 Fetching stock list from GitHub Excel...")
 
 try:
-    EXCEL_URL = "https://github.com/NewMV/MV2/blob/main/Stock%20List%20.xlsx"
+    EXCEL_URL = "https://raw.githubusercontent.com/NewMV/MV2/main/Stock%20List%20%20(3).xlsx
+"
     response = requests.get(EXCEL_URL)
     response.raise_for_status()
 
