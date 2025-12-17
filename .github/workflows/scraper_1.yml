@@ -6,22 +6,16 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-python@v5
-      with: { python-version: '3.11' }
-    - run: pip install -r requirements.txt
-    - name: Setup Credentials & Cookies
-      run: |
-        # ✅ BASE64 DECODE credentials.json
-        echo '${{ secrets.GSHEETS_CREDENTIALS }}' | base64 -d > credentials.json
-        # ✅ BASE64 DECODE cookies.json  
-        echo '${{ secrets.COOKIES_JSON }}' | base64 -d > cookies.json
-        # ✅ Verify files
-        echo "Credentials size: $(wc -c < credentials.json) bytes"
-        echo "Cookies size: $(wc -c < cookies.json) bytes"
-        head -n 3 credentials.json  # Show first 3 lines for verification
-      shell: bash
-    - run: python run_scraper.py
+      with:
+        python-version: '3.11'
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+    - name: Run Scraper Part 1
+      run: python run_scraper.py
       env:
+        GSHEETS_CREDENTIALS: ${{ secrets.GSHEETS_CREDENTIALS }}
+        COOKIES_JSON: ${{ secrets.COOKIES_JSON }}
         ACCOUNT_START: 0
         ACCOUNT_END: 625
         BATCH_INDEX: 0
-        BATCH_SIZE: 625
+        BATCH_SIZE: 50
