@@ -2,10 +2,7 @@ import os
 import time
 import json
 import gspread
-import requests
-import pandas as pd
 from datetime import date
-from io import BytesIO
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -15,13 +12,12 @@ from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 from webdriver_manager.chrome import ChromeDriverManager
 
-# ---------------- SHARDING (env-driven) ---------------- #
+# ---------------- CONFIG & SHARDING ---------------- #
 SHARD_INDEX = int(os.getenv("SHARD_INDEX", "0"))
 SHARD_STEP = int(os.getenv("SHARD_STEP", "1"))
 START_INDEX = int(os.getenv("START_INDEX", "1")) 
 END_INDEX = int(os.getenv("END_INDEX", "2500"))
 checkpoint_file = os.getenv("CHECKPOINT_FILE", "checkpoint_new_1.txt")
-last_i = int(open(checkpoint_file).read()) if os.path.exists(checkpoint_file) else START_INDEX
 
 # ---------------- SETUP CHROME OPTIONS ---------------- #
 chrome_options = Options()
@@ -29,112 +25,91 @@ chrome_options.add_argument("--headless=new")
 chrome_options.add_argument("--disable-gpu")
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
-chrome_options.add_argument("--window-size=1920,1080")
 
-# ---------------- GOOGLE SHEETS AUTH & DATA FETCH ---------------- #
+# ---------------- GOOGLE SHEETS AUTH ---------------- #
 try:
     gc = gspread.service_account("credentials.json")
     sh = gc.open('New MV2')
-    
-    # READ FROM: "STOCK LIST"
     source_sheet = sh.worksheet('Stock List')
-    # WRITE TO: "Sheet5"
     output_sheet = sh.worksheet('Sheet5')
     
-    print("✅ Connected to Google Sheets.")
-
-    # Fetch all data from the SOURCE sheet
-    # Column A (Index 0) = Symbol, Column D (Index 3) = URL
+    # Batch Read: Get all values once to save read requests
     all_rows = source_sheet.get_all_values()
-    
-    # Skip Header (Row 1)
-    data_rows = all_rows[1:] 
-    name_list = [row[0] if len(row) > 0 else "" for row in data_rows]
-    company_list = [row[3] if len(row) > 3 else "" for row in data_rows]
-    
-    print(f"✅ Loaded {len(company_list)} records from 'STOCK LIST'.")
+    data_rows = all_rows[1:] # Skip Header
+    print(f"✅ Loaded {len(data_rows)} rows from 'STOCK LIST'.")
 except Exception as e:
-    print(f"❌ Error accessing Google Sheets: {e}")
+    print(f"❌ Auth/Read Error: {e}")
     exit(1)
 
 current_date = date.today().strftime("%m/%d/%Y")
 
-# ---------------- SCRAPER FUNCTION ---------------- #
 def scrape_tradingview(company_url):
     if not company_url or not company_url.startswith("http"):
         return []
-
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=chrome_options
-    )
     
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
     try:
-        # Handle Cookies
         if os.path.exists("cookies.json"):
             driver.get("https://www.tradingview.com/")
-            with open("cookies.json", "r", encoding="utf-8") as f:
+            with open("cookies.json", "r") as f:
                 cookies = json.load(f)
-            for cookie in cookies:
-                try:
-                    cookie_to_add = {k: cookie[k] for k in ('name', 'value', 'domain', 'path') if k in cookie}
-                    driver.add_cookie(cookie_to_add)
+            for c in cookies:
+                try: driver.add_cookie({k: c[k] for k in ('name', 'value', 'domain', 'path') if k in c})
                 except: pass
             driver.refresh()
-            time.sleep(2)
 
         driver.get(company_url)
-        print(f"🔎 Visiting: {company_url}")
-        
-        # Wait for data elements
-        WebDriverWait(driver, 45).until(
-            EC.visibility_of_element_located((By.XPATH, '/html/body/div[2]/div/div[5]/div/div[1]/div/div[2]/div[1]/div[2]/div/div[1]/div[2]/div[2]/div[2]/div[2]/div'))
+        WebDriverWait(driver, 30).until(
+            EC.visibility_of_element_located((By.CLASS_NAME, 'valueValue-l31H9iuA'))
         )
-        
         soup = BeautifulSoup(driver.page_source, "html.parser")
-        val_elements = soup.find_all("div", class_="valueValue-l31H9iuA apply-common-tooltip")
-        values = [el.get_text().replace('−', '-').replace('∅', '').strip() for el in val_elements]
-        return values
-
-    except Exception as e:
-        print(f"❌ Scraping error for {company_url}: {e}")
+        vals = [el.get_text().replace('−', '-').replace('∅', '').strip() for el in soup.find_all("div", class_="valueValue-l31H9iuA")]
+        return vals
+    except:
         return []
     finally:
         driver.quit()
 
-# ---------------- MAIN LOOP ---------------- #
-for i, company_url in enumerate(company_list):
+# ---------------- MAIN PROCESSING ---------------- #
+results_to_upload = []
+last_processed_row = START_INDEX
+
+# We process in the exact sequence of the source sheet
+for i, row in enumerate(data_rows):
+    current_row_num = i + 2 # Spreadsheet row index
     
-    current_idx = i + 1 
-    
-    if current_idx < last_i or current_idx < START_INDEX or current_idx > END_INDEX:
+    # Sharding Logic
+    if current_row_num < START_INDEX or current_row_num > END_INDEX:
         continue
     if i % SHARD_STEP != SHARD_INDEX:
         continue
 
-    name = name_list[i]
-    # target_row matches the data index plus header offset
-    target_row = i + 2 
+    symbol = row[0]
+    url = row[3] if len(row) > 3 else ""
+
+    print(f"🔎 [{current_row_num}] Scraping {symbol}...")
+    scraped_data = scrape_tradingview(url)
     
-    print(f"\n📌 Processing Index {current_idx} | {name} | Target Row: {target_row}")
-
-    scraped_values = scrape_tradingview(company_url)
-
-    if scraped_values:
-        row_data = [name, current_date] + scraped_values
-        try:
-            # Updating Sheet5
-            output_sheet.update(f'A{target_row}', [row_data])
-            print(f"💾 Saved to 'Sheet5' Row {target_row} → {name}")
-        except Exception as e:
-            print(f"⚠️ Google Sheets update error: {e}")
-    else:
-        print(f"⚠️ No data captured for {name}")
-
-    # Update Checkpoint
-    with open(checkpoint_file, "w") as f:
-        f.write(str(current_idx + 1))
+    # Maintain sequence: [Symbol, Date, Val1, Val2...]
+    row_output = [symbol, current_date] + scraped_data
+    results_to_upload.append(row_output)
     
-    time.sleep(1)
+    # Update local checkpoint
+    last_processed_row = current_row_num
+    
+    # Optional: Small batch write every 10 rows to prevent data loss if script crashes
+    if len(results_to_upload) >= 10:
+        start_range = f"A{last_processed_row - 9}"
+        output_sheet.update(start_range, results_to_upload)
+        print(f"💾 Batched 10 rows to Sheet5 (up to row {last_processed_row})")
+        results_to_upload = [] # Clear batch
+        with open(checkpoint_file, "w") as f: f.write(str(last_processed_row))
+        time.sleep(2) # Pause to respect API limits
 
-print("\n✅ All tasks completed.")
+# Final upload for remaining rows
+if results_to_upload:
+    start_row = last_processed_row - len(results_to_upload) + 1
+    output_sheet.update(f"A{start_row}", results_to_upload)
+    with open(checkpoint_file, "w") as f: f.write(str(last_processed_row))
+
+print("\n✅ Process Complete. Data synced in sequence.")
