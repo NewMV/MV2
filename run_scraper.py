@@ -13,7 +13,7 @@ from selenium.common.exceptions import TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 import tempfile
 
-print("🚀 MV2 TradingView Scraper - GitHub Actions FIXED")
+print("🚀 MV2 Scraper - ULTRA STABLE")
 
 # CONFIG
 STOCK_LIST_URL = "https://docs.google.com/spreadsheets/d/1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4/edit?gid=0#gid=0"
@@ -26,12 +26,12 @@ BATCH_SIZE = int(os.getenv("BATCH_SIZE", "50"))
 
 print(f"📊 Range: {ACCOUNT_START}-{ACCOUNT_END}")
 
-# YOUR SECRETS
+# SECRETS
 GSPREAD_CREDENTIALS = os.getenv("GSPREAD_CREDENTIALS")
 TRADINGVIEW_COOKIES = os.getenv("TRADINGVIEW_COOKIES")
 
 if not GSPREAD_CREDENTIALS:
-    print("❌ GSPREAD_CREDENTIALS missing!")
+    print("❌ GSPREAD_CREDENTIALS missing")
     exit(1)
 
 # Temp files
@@ -49,17 +49,6 @@ if TRADINGVIEW_COOKIES:
 client = gspread.service_account(filename=creds_path)
 source_sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
 dest_sheet = client.open_by_url(NEW_MV2_URL).worksheet("Sheet5")
-print("✅ Sheets OK")
+print("✅ Sheets connected")
 
-all_rows = source_sheet.get_all_values()[1:]
-chart_links = [row[3] if len(row) > 3 else "" for row in all_rows]
-account_links = chart_links[ACCOUNT_START:ACCOUNT_END]
-start = BATCH_INDEX * BATCH_SIZE
-end = start + BATCH_SIZE
-batch_links = account_links[start:end]
-
-print(f"📈 {len(batch_links)} URLs")
-
-current_date = date.today().strftime("%m/%d/%Y")
-
-# 🔥 GITHUB ACTIONS
+all_rows
