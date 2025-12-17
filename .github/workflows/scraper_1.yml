@@ -1,21 +1,36 @@
-name: MV2 Scraper Part 1 (1-625)
-on: [workflow_dispatch]
+name: TradingView Scraper – Test (20 Symbols)
+
+on:
+  workflow_dispatch:
+
 jobs:
-  scrape:
+  scraper-test:
     runs-on: ubuntu-latest
+
+    env:
+      SHARD_INDEX: 0
+      SHARD_STEP: 1
+      START_INDEX: 1
+      END_INDEX: 20
+      CHECKPOINT_FILE: checkpoint_test.txt
+
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-    - name: Install dependencies
-      run: pip install -r requirements.txt
-    - name: Run Scraper Part 1
-      run: python run_scraper.py
-      env:
-        GSHEETS_CREDENTIALS: ${{ secrets.GSHEETS_CREDENTIALS }}
-        COOKIES_JSON: ${{ secrets.COOKIES_JSON }}
-        ACCOUNT_START: 0
-        ACCOUNT_END: 625
-        BATCH_INDEX: 0
-        BATCH_SIZE: 50
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Create Google credentials file
+        run: |
+          echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > credentials.json
+
+      - name: Run scraper (test mode – 20 symbols)
+        run: |
+          python run_scraper.py
