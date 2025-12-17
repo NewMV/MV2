@@ -29,23 +29,26 @@ chrome_options.add_argument("--disable-dev-shm-usage")
 
 # ---------------- GOOGLE SHEETS AUTH ---------------- #
 try:
+    # Initialize gspread
     gc = gspread.service_account("credentials.json")
     
-    # 1. Open the SOURCE file and tab
-    source_file = gc.open('Stock List')
-    source_sheet = source_file.worksheet('Sheet1')
+    # 1. Open Source: File named "Stock List", tab named "Sheet1"
+    source_spreadsheet = gc.open('Stock List')
+    source_sheet = source_spreadsheet.worksheet('Sheet1')
     
-    # 2. Open the DESTINATION file and tab
-    dest_file = gc.open('New MV2')
-    output_sheet = dest_file.worksheet('Sheet5')
+    # 2. Open Destination: File named "New MV2", tab named "Sheet5"
+    dest_spreadsheet = gc.open('New MV2')
+    output_sheet = dest_spreadsheet.worksheet('Sheet5')
     
     # Read source data
     all_rows = source_sheet.get_all_values()
     data_rows = all_rows[1:]  # Skip header
-    print(f"✅ Connected! Reading from 'Stock List' [Sheet1] | Writing to 'New MV2' [Sheet5]")
+    print(f"✅ Auth Successful.")
+    print(f"📋 Reading from: Stock List -> Sheet1")
+    print(f"📝 Writing to: New MV2 -> Sheet5")
+
 except Exception as e:
-    print(f"❌ Connection Error: {e}")
-    print("💡 Tip: Make sure the service account email is shared with BOTH 'Stock List' and 'New MV2' spreadsheets.")
+    print(f"❌ Connection Error: {str(e)}")
     exit(1)
 
 current_date = date.today().strftime("%m/%d/%Y")
@@ -96,7 +99,7 @@ for i, row in enumerate(data_rows):
     if i % SHARD_STEP != SHARD_INDEX:
         continue
 
-    # Input: Column A (0) is Name, Column D (3) is URL
+    # Input Logic: Symbol in Col A (0), Link in Col D (3)
     name = row[0] if len(row) > 0 else f"Row {i}"
     company_url = row[3] if len(row) > 3 else ""
     target_row = i + 2 
@@ -104,7 +107,7 @@ for i, row in enumerate(data_rows):
     if batch_start_row is None:
         batch_start_row = target_row
 
-    print(f"📌 Index {i} | {name} | Target Row: {target_row}")
+    print(f"📌 Index {i} | {name} | Row: {target_row}")
     values = scrape_tradingview(company_url)
 
     # Sequence logic: Ensure Symbol is always first; use "Error" if data missing
@@ -112,12 +115,13 @@ for i, row in enumerate(data_rows):
         row_data = [name, current_date] + values
     else:
         # Maintaining alignment so your sheet sequence stays perfect
-        row_data = [name, current_date, "Error", "Error", "Error", "Error"]
+        # Adding 5 "Error" slots - adjust this to match your usual column count
+        row_data = [name, current_date, "Error", "Error", "Error", "Error", "Error"]
 
     results_batch.append(row_data)
 
-    # Batch writing: Send 10 rows at once to avoid Google Sheets API limits
-    if len(results_batch) >= 10:
+    # Batch writing: Send 5 rows at once (smaller batch is safer for quota)
+    if len(results_batch) >= 5:
         try:
             output_sheet.update(f'A{batch_start_row}', results_batch)
             print(f"💾 Saved batch up to row {target_row}")
@@ -132,8 +136,8 @@ for i, row in enumerate(data_rows):
     
     time.sleep(1)
 
-# Upload any remaining items at the end
-if results_batch:
+# Final upload for remaining items
+if results_batch and batch_start_row:
     output_sheet.update(f'A{batch_start_row}', results_batch)
 
-print("\n🏁 Scraping process complete.")
+print("\n🏁 Process finished.")
