@@ -26,23 +26,23 @@ BATCH_SIZE = int(os.getenv("BATCH_SIZE", "50"))
 
 print(f"📊 Range: {ACCOUNT_START}-{ACCOUNT_END} | Batch: {BATCH_INDEX}")
 
-# GitHub Secrets → Temp Files
-GSHEETS_CREDENTIALS = os.getenv("GSHEETS_CREDENTIALS")
-COOKIES_JSON = os.getenv("COOKIES_JSON")
+# 🔥 YOUR SECRET NAMES!
+GSPREAD_CREDENTIALS = os.getenv("GSPREAD_CREDENTIALS")
+TRADINGVIEW_COOKIES = os.getenv("TRADINGVIEW_COOKIES")
 
-if not GSHEETS_CREDENTIALS:
-    print("❌ GSHEETS_CREDENTIALS secret missing!")
+if not GSPREAD_CREDENTIALS:
+    print("❌ GSPREAD_CREDENTIALS secret missing!")
     exit(1)
 
 # Create temp files
 with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-    f.write(GSHEETS_CREDENTIALS)
+    f.write(GSPREAD_CREDENTIALS)
     creds_path = f.name
 
 cookies_path = None
-if COOKIES_JSON:
+if TRADINGVIEW_COOKIES:
     with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
-        f.write(COOKIES_JSON)
+        f.write(TRADINGVIEW_COOKIES)
         cookies_path = f.name
 
 print("✅ Temp files created")
@@ -71,7 +71,6 @@ options.add_argument("--no-sandbox")
 options.add_argument("--disable-dev-shm-usage")
 options.add_argument("--disable-gpu")
 options.add_argument("--window-size=1920,1080")
-options.add_argument("--disable-dev-shm-usage")
 options.add_argument("--disable-extensions")
 options.add_argument("--no-zygote")
 options.add_argument("--single-process")
@@ -80,7 +79,7 @@ driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), opti
 driver.set_page_load_timeout(45)
 
 try:
-    # Cookies
+    # YOUR COOKIES SECRET
     if cookies_path:
         driver.get("https://www.tradingview.com/")
         time.sleep(3)
@@ -97,11 +96,11 @@ try:
                 driver.add_cookie(cookie_data)
             driver.refresh()
             time.sleep(3)
-            print("✅ Cookies loaded")
+            print("✅ TRADINGVIEW_COOKIES loaded")
         except:
-            print("⚠️ No cookies")
+            print("⚠️ TRADINGVIEW_COOKIES skip")
 
-    # MAIN LOOP - SYMBOL | DATE | VALUES
+    # MAIN LOOP - SYMBOL | DATE | VALUES (JS PERFECT ORDER)
     row_buffer = []
     start_row = -1
     processed = 0
@@ -171,3 +170,9 @@ try:
 
 finally:
     driver.quit()
+    # Cleanup
+    try:
+        os.unlink(creds_path)
+        if cookies_path:
+            os.unlink(cookies_path)
+    except: pass
