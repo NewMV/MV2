@@ -13,8 +13,8 @@ jobs:
     - name: Run Scraper Part 1
       run: python run_scraper.py
       env:
-        GSHEETS_CREDENTIALS: ${{ secrets.GSHEETS_CREDENTIALS }}
-        COOKIES_JSON: ${{ secrets.COOKIES_JSON }}
+        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+        TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
         ACCOUNT_START: 0
         ACCOUNT_END: 625
         BATCH_INDEX: 0
