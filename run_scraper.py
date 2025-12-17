@@ -29,25 +29,27 @@ chrome_options.add_argument("--disable-dev-shm-usage")
 
 # ---------------- GOOGLE SHEETS AUTH ---------------- #
 try:
-    # Initialize gspread
-    gc = gspread.service_account("credentials.json")
+    # Use a service account to authenticate
+    gc = gspread.service_account(filename="credentials.json")
     
-    # 1. Open Source: File named "Stock List", tab named "Sheet1"
-    source_spreadsheet = gc.open('Stock List')
-    source_sheet = source_spreadsheet.worksheet('Sheet1')
+    # Open Source: File "Stock List", Tab "Sheet1"
+    source_ss = gc.open("Stock List")
+    source_sheet = source_ss.worksheet("Sheet1")
     
-    # 2. Open Destination: File named "New MV2", tab named "Sheet5"
-    dest_spreadsheet = gc.open('New MV2')
-    output_sheet = dest_spreadsheet.worksheet('Sheet5')
+    # Open Destination: File "New MV2", Tab "Sheet5"
+    dest_ss = gc.open("New MV2")
+    output_sheet = dest_ss.worksheet("Sheet5")
     
-    # Read source data
+    # Load all source data at once
     all_rows = source_sheet.get_all_values()
-    data_rows = all_rows[1:]  # Skip header
+    data_rows = all_rows[1:]  # Skip header row
+    
     print(f"✅ Auth Successful.")
-    print(f"📋 Reading from: Stock List -> Sheet1")
-    print(f"📝 Writing to: New MV2 -> Sheet5")
+    print(f"📋 Source: 'Stock List' -> 'Sheet1' ({len(data_rows)} rows)")
+    print(f"📝 Destination: 'New MV2' -> 'Sheet5'")
 
 except Exception as e:
+    # This will catch if the sheets are not shared with the service account email
     print(f"❌ Connection Error: {str(e)}")
     exit(1)
 
@@ -55,6 +57,7 @@ current_date = date.today().strftime("%m/%d/%Y")
 
 # ---------------- SCRAPER FUNCTION (main logic preserved) ---------------- #
 def scrape_tradingview(company_url):
+    # Setup driver inside function as per your original logic
     driver = webdriver.Chrome(
         service=Service(ChromeDriverManager().install()),
         options=chrome_options
@@ -75,7 +78,8 @@ def scrape_tradingview(company_url):
 
         driver.get(company_url)
         print(f"🔎 Visiting: {company_url}")
-        # Preserving your exact XPATH logic
+        
+        # Preserving your exact XPATH
         WebDriverWait(driver, 45).until(
             EC.visibility_of_element_located((By.XPATH, '/html/body/div[2]/div/div[5]/div/div[1]/div/div[2]/div[1]/div[2]/div/div[1]/div[2]/div[2]/div[2]/div[2]/div'))
         )
@@ -93,44 +97,45 @@ results_batch = []
 batch_start_row = None 
 
 for i, row in enumerate(data_rows):
-    # Original sharding logic preserved
+    # Preserving sharding/checkpoint logic
     if i < last_i or i < START_INDEX or i > END_INDEX:
         continue
     if i % SHARD_STEP != SHARD_INDEX:
         continue
 
-    # Input Logic: Symbol in Col A (0), Link in Col D (3)
+    # Input: Col A (0) is Name, Col D (3) is URL
     name = row[0] if len(row) > 0 else f"Row {i}"
     company_url = row[3] if len(row) > 3 else ""
-    target_row = i + 2 
+    target_row = i + 2 # Header is row 1, index 0 is row 2
     
     if batch_start_row is None:
         batch_start_row = target_row
 
     print(f"📌 Index {i} | {name} | Row: {target_row}")
+    
     values = scrape_tradingview(company_url)
 
-    # Sequence logic: Ensure Symbol is always first; use "Error" if data missing
+    # Sequence preservation logic:
+    # Always keep the symbol name in the first column so order is maintained
     if values:
         row_data = [name, current_date] + values
     else:
-        # Maintaining alignment so your sheet sequence stays perfect
-        # Adding 5 "Error" slots - adjust this to match your usual column count
-        row_data = [name, current_date, "Error", "Error", "Error", "Error", "Error"]
+        # Fills with placeholders so the row isn't skipped in the sheet
+        row_data = [name, current_date, "Error/No Data", "N/A", "N/A", "N/A"]
 
     results_batch.append(row_data)
 
-    # Batch writing: Send 5 rows at once (smaller batch is safer for quota)
+    # Batch writing: Send 5 rows at once to avoid Google API Rate Limits
     if len(results_batch) >= 5:
         try:
             output_sheet.update(f'A{batch_start_row}', results_batch)
-            print(f"💾 Saved batch up to row {target_row}")
+            print(f"💾 Batched upload complete up to Row {target_row}")
             results_batch = []
             batch_start_row = None
         except Exception as e:
             print(f"⚠️ Write Error: {e}")
 
-    # Preserving your checkpoint system
+    # Main logic checkpoint update
     with open(checkpoint_file, "w") as f:
         f.write(str(i + 1))
     
@@ -140,4 +145,4 @@ for i, row in enumerate(data_rows):
 if results_batch and batch_start_row:
     output_sheet.update(f'A{batch_start_row}', results_batch)
 
-print("\n🏁 Process finished.")
+print("\n🏁 Process finished successfully.")
