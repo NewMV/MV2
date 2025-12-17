@@ -8,12 +8,20 @@ jobs:
     - uses: actions/setup-python@v5
       with: { python-version: '3.11' }
     - run: pip install -r requirements.txt
-    - run: |
-        echo '${{ secrets.GSHEETS_CREDENTIALS }}' > credentials.json
-        echo '${{ secrets.COOKIES_JSON }}' > cookies.json
+    - name: Setup Credentials & Cookies
+      run: |
+        # ✅ BASE64 DECODE credentials.json
+        echo '${{ secrets.GSHEETS_CREDENTIALS }}' | base64 -d > credentials.json
+        # ✅ BASE64 DECODE cookies.json  
+        echo '${{ secrets.COOKIES_JSON }}' | base64 -d > cookies.json
+        # ✅ Verify files
+        echo "Credentials size: $(wc -c < credentials.json) bytes"
+        echo "Cookies size: $(wc -c < cookies.json) bytes"
+        head -n 3 credentials.json  # Show first 3 lines for verification
+      shell: bash
     - run: python run_scraper.py
       env:
         ACCOUNT_START: 0
         ACCOUNT_END: 625
         BATCH_INDEX: 0
-        BATCH_SIZE: 625  # Single job = perfect sequential order
+        BATCH_SIZE: 625
