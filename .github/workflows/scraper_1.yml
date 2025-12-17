@@ -15,7 +15,7 @@ jobs:
       CHECKPOINT_FILE: checkpoint_test.txt
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -27,20 +27,21 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Create credentials.json from GitHub Secret
+      # ---- GOOGLE SHEETS CREDENTIALS ----
+      - name: Create credentials.json
         run: |
           cat << 'EOF' > credentials.json
-          ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          ${{ secrets.GSPREAD_CREDENTIALS }}
           EOF
 
-      - name: Verify credentials.json
+      # ---- TRADINGVIEW LOGIN COOKIES ----
+      - name: Create cookies.json
         run: |
-          python - <<EOF
-          import json
-          json.load(open("credentials.json"))
-          print("✅ credentials.json is valid JSON")
+          cat << 'EOF' > cookies.json
+          ${{ secrets.TRADINGVIEW_COOKIES }}
           EOF
 
-      - name: Run scraper (test – 20 symbols)
+      # ---- VALIDATE FILES (FAIL FAST) ----
+      - name: Validate JSON files
         run: |
-          python run_scraper.py
+          pytho
