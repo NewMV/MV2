@@ -19,10 +19,16 @@ from webdriver_manager.chrome import ChromeDriverManager
 # ---------------- SHARDING (env-driven) ---------------- #
 SHARD_INDEX = int(os.getenv("SHARD_INDEX", "0"))
 SHARD_STEP = int(os.getenv("SHARD_STEP", "1"))
-START_INDEX = int(os.getenv("START_INDEX", "1"))
+START_INDEX = int(os.getenv("START_INDEX", "0")) # Set to 0 for standard lists
 END_INDEX = int(os.getenv("END_INDEX", "2500"))
 checkpoint_file = os.getenv("CHECKPOINT_FILE", "checkpoint_new_1.txt")
-last_i = int(open(checkpoint_file).read()) if os.path.exists(checkpoint_file) else START_INDEX
+
+# Read last index from checkpoint
+if os.path.exists(checkpoint_file):
+    with open(checkpoint_file, "r") as f:
+        last_i = int(f.read().strip())
+else:
+    last_i = START_INDEX
 
 # ---------------- SETUP ---------------- #
 chrome_options = Options()
@@ -30,32 +36,29 @@ chrome_options.add_argument("--headless=new")
 chrome_options.add_argument("--disable-gpu")
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
-chrome_options.add_argument("--remote-debugging-port=9222")
 
 # ---------------- GOOGLE SHEETS AUTH ---------------- #
 try:
     gc = gspread.service_account("credentials.json")
-    sheet_data = gc.open('New MV2').worksheet('Sheet5')  # ✅ Sheet5
+    sheet_data = gc.open('New MV2').worksheet('Sheet5')
     print("✅ Connected to Google Sheet: Sheet5")
 except Exception as e:
     print(f"❌ Error loading credentials.json: {e}")
     exit(1)
 
-# ---------------- READ STOCK LIST FROM GITHUB EXCEL ---------------- #
+# ---------------- READ STOCK LIST FROM GITHUB ---------------- #
 print("📥 Fetching stock list from GitHub Excel...")
-
 try:
     EXCEL_URL = "https://raw.githubusercontent.com/NewMV/MV2/main/Stock%20List%20%20(3).xlsx"
     response = requests.get(EXCEL_URL)
     response.raise_for_status()
 
     df = pd.read_excel(BytesIO(response.content), engine="openpyxl")
-    name_list = df.iloc[:, 0].fillna("").tolist()        # Column A - Name
-    company_list = df.iloc[:, 3].fillna("").tolist()    # Column E - URL
-
-    print(f"✅ Loaded {len(company_list)} companies from GitHub Excel.")
+    name_list = df.iloc[:, 0].fillna("").tolist()    # Column A
+    company_list = df.iloc[:, 3].fillna("").tolist() # Column E
+    print(f"✅ Loaded {len(company_list)} companies.")
 except Exception as e:
-    print(f"❌ Error reading Excel from GitHub: {e}")
+    print(f"❌ Error reading Excel: {e}")
     exit(1)
 
 current_date = date.today().strftime("%m/%d/%Y")
@@ -66,90 +69,84 @@ def scrape_tradingview(company_url):
         service=Service(ChromeDriverManager().install()),
         options=chrome_options
     )
-    driver.set_window_size(1920, 1080)
-
+    
     try:
-        # LOGIN USING SAVED COOKIES
+        driver.get("https://www.tradingview.com/")
         if os.path.exists("cookies.json"):
-            driver.get("https://www.tradingview.com/")
             with open("cookies.json", "r", encoding="utf-8") as f:
                 cookies = json.load(f)
-
             for cookie in cookies:
                 try:
-                    cookie_to_add = {
-                        k: cookie[k]
-                        for k in ('name', 'value', 'domain', 'path')
-                        if k in cookie
-                    }
-                    cookie_to_add['secure'] = cookie.get('secure', False)
-                    cookie_to_add['httpOnly'] = cookie.get('httpOnly', False)
-                    driver.add_cookie(cookie_to_add)
-                except Exception:
-                    pass
-
+                    driver.add_cookie({k: cookie[k] for k in ('name', 'value', 'domain', 'path') if k in cookie})
+                except: pass
             driver.refresh()
             time.sleep(2)
-        else:
-            print("⚠️ cookies.json not found. Continuing without login.")
 
         driver.get(company_url)
-        print(f"🔎 Visiting: {company_url}")
-
-        WebDriverWait(driver, 45).until(
-            EC.visibility_of_element_located(
-                (By.XPATH,
-                 '/html/body/div[2]/div/div[5]/div/div[1]/div/div[2]/div[1]/div[2]/div/div[1]/div[2]/div[2]/div[2]/div[2]/div')
-            )
+        # Wait for the specific value container
+        WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located((By.CLASS_NAME, "valueValue-l31H9iuA"))
         )
 
         soup = BeautifulSoup(driver.page_source, "html.parser")
         values = [
             el.get_text().replace('−', '-').replace('∅', '').strip()
-            for el in soup.find_all(
-                "div",
-                class_="valueValue-l31H9iuA apply-common-tooltip"
-            )
+            for el in soup.find_all("div", class_="valueValue-l31H9iuA apply-common-tooltip")
         ]
-
-        print(f"✅ Scraped {len(values)} values")
         return values
-
-    except NoSuchElementException:
-        print(f"⚠️ Data element not found: {company_url}")
-        return []
     except Exception as e:
-        print(f"❌ Scraping error for {company_url}: {e}")
+        print(f"⚠️ Scraping error: {e}")
         return []
     finally:
         driver.quit()
 
-# ---------------- MAIN LOOP ---------------- #
-for i, company_url in enumerate(company_list[last_i:], last_i):
+# ---------------- MAIN LOOP (Row-Specific Writing) ---------------- #
+# We iterate through the whole list, but only process indices that meet shard/checkpoint rules
+for i in range(len(company_list)):
 
-    if i < START_INDEX or i > END_INDEX:
+    # Skip logic
+    if i < last_i or i < START_INDEX or i > END_INDEX:
         continue
-
     if i % SHARD_STEP != SHARD_INDEX:
         continue
 
-    name = name_list[i] if i < len(name_list) else f"Row {i}"
-    print(f"\n📌 Index {i} | {name}")
+    url = company_list[i]
+    name = name_list[i]
+    
+    # CALCULATE TARGET ROW: 
+    # If i=0 is your first company, it goes to Row 2 (Row 1 is Header)
+    target_row = i + 2 
 
-    values = scrape_tradingview(company_url)
+    print(f"\n📌 Processing Index {i} | {name} | Target Row: {target_row}")
 
-    if values:
-        row = [name, current_date] + values
+    if not url or str(url).strip() == "":
+        print(f"⏩ Skipping {name}: No URL found.")
+        continue
+
+    scraped_values = scrape_tradingview(url)
+
+    if scraped_values:
+        # Prepare the row: [Name, Date, Value1, Value2, ...]
+        row_to_upload = [name, current_date] + scraped_values
+        
         try:
-            sheet_data.append_row(row, table_range='A1')  # ✅ Column A
-            print(f"💾 Saved to Sheet5 → {name}")
+            # Create a range (e.g., A2:Z2) to update only that specific row
+            # This ensures index 5 always goes to row 7, maintaining perfect order
+            end_col = chr(64 + len(row_to_upload)) if len(row_to_upload) <= 26 else "Z"
+            cell_range = f'A{target_row}:{end_col}{target_row}'
+            
+            sheet_data.update(cell_range, [row_to_upload])
+            print(f"💾 Row {target_row} updated successfully.")
         except Exception as e:
-            print(f"⚠️ Google Sheets error for {name}: {e}")
+            print(f"❌ Sheets Update Error: {e}")
     else:
-        print(f"⚠️ No data scraped for {name}")
+        print(f"⚠️ No data retrieved for {name}")
 
+    # Update Checkpoint
     with open(checkpoint_file, "w") as f:
-        f.write(str(i))
-        print(f"🧾 Checkpoint updated → {i}")
-
+        f.write(str(i + 1))
+    
+    # Short rest to prevent API rate limits
     time.sleep(1)
+
+print("\n✨ Scraper task completed.")
