@@ -1,47 +1,44 @@
-name: TradingView Scraper – Test (20 Symbols)
+name: TradingView Scraper Batch 1
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
 
 jobs:
-  scraper-test:
+  scrape:
     runs-on: ubuntu-latest
-
-    env:
-      SHARD_INDEX: 0
-      SHARD_STEP: 1
-      START_INDEX: 1
-      END_INDEX: 20
-      CHECKPOINT_FILE: checkpoint_test.txt
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9]
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          pip install pandas requests gspread selenium beautifulsoup4 openpyxl webdriver-manager
 
-      # ---- GOOGLE SHEETS CREDENTIALS ----
-      - name: Create credentials.json
+      - name: Create secrets files
         run: |
-          cat << 'EOF' > credentials.json
-          ${{ secrets.GSPREAD_CREDENTIALS }}
-          EOF
+          echo "$GSPREAD_CREDENTIALS" > credentials.json
+          echo "$TRADINGVIEW_COOKIES" > cookies.json
+        env:
+          GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+          TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
 
-      # ---- TRADINGVIEW LOGIN COOKIES ----
-      - name: Create cookies.json
+      - name: Run scraper
         run: |
-          cat << 'EOF' > cookies.json
-          ${{ secrets.TRADINGVIEW_COOKIES }}
-          EOF
-
-      # ---- VALIDATE FILES (FAIL FAST) ----
-      - name: Validate JSON files
-        run: |
-          pytho
+          export PYTHONUNBUFFERED=1
+          python -X faulthandler run_scraper.py
+        env:
+          START_INDEX: 1
+          END_INDEX: 2500
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_STEP: 40
