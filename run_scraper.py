@@ -27,32 +27,25 @@ chrome_options.add_argument("--disable-gpu")
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
 
-# ---------------- GOOGLE SHEETS AUTH & DYNAMIC READ ---------------- #
+# ---------------- GOOGLE SHEETS AUTH ---------------- #
 try:
     gc = gspread.service_account("credentials.json")
-    sh = gc.open('New MV2')
     
-    # Logic to find "Stock List" even if there are hidden spaces
-    all_worksheets = sh.worksheets()
-    source_sheet = None
-    for sheet in all_worksheets:
-        if "stock list" in sheet.title.lower().strip():
-            source_sheet = sheet
-            break
+    # 1. Open the SOURCE file and tab
+    source_file = gc.open('Stock List')
+    source_sheet = source_file.worksheet('Sheet1')
     
-    if not source_sheet:
-        available = [s.title for s in all_worksheets]
-        print(f"❌ Error: Could not find 'Stock List'. Available tabs: {available}")
-        exit(1)
-
-    output_sheet = sh.worksheet('Sheet5')
+    # 2. Open the DESTINATION file and tab
+    dest_file = gc.open('New MV2')
+    output_sheet = dest_file.worksheet('Sheet5')
     
-    # Read data from Google Sheet instead of Github
+    # Read source data
     all_rows = source_sheet.get_all_values()
     data_rows = all_rows[1:]  # Skip header
-    print(f"✅ Reading from source sheet: {source_sheet.title}")
+    print(f"✅ Connected! Reading from 'Stock List' [Sheet1] | Writing to 'New MV2' [Sheet5]")
 except Exception as e:
     print(f"❌ Connection Error: {e}")
+    print("💡 Tip: Make sure the service account email is shared with BOTH 'Stock List' and 'New MV2' spreadsheets.")
     exit(1)
 
 current_date = date.today().strftime("%m/%d/%Y")
@@ -79,6 +72,7 @@ def scrape_tradingview(company_url):
 
         driver.get(company_url)
         print(f"🔎 Visiting: {company_url}")
+        # Preserving your exact XPATH logic
         WebDriverWait(driver, 45).until(
             EC.visibility_of_element_located((By.XPATH, '/html/body/div[2]/div/div[5]/div/div[1]/div/div[2]/div[1]/div[2]/div/div[1]/div[2]/div[2]/div[2]/div[2]/div'))
         )
@@ -96,13 +90,13 @@ results_batch = []
 batch_start_row = None 
 
 for i, row in enumerate(data_rows):
-    # Original sharding logic
+    # Original sharding logic preserved
     if i < last_i or i < START_INDEX or i > END_INDEX:
         continue
     if i % SHARD_STEP != SHARD_INDEX:
         continue
 
-    # Main logic: Column A is Name, Column D (index 3) is URL
+    # Input: Column A (0) is Name, Column D (3) is URL
     name = row[0] if len(row) > 0 else f"Row {i}"
     company_url = row[3] if len(row) > 3 else ""
     target_row = i + 2 
@@ -110,37 +104,36 @@ for i, row in enumerate(data_rows):
     if batch_start_row is None:
         batch_start_row = target_row
 
-    print(f"📌 Index {i} | {name} | Row: {target_row}")
-
+    print(f"📌 Index {i} | {name} | Target Row: {target_row}")
     values = scrape_tradingview(company_url)
 
-    # Sequence logic: Always keep name/date, fill Errors if scrape failed
+    # Sequence logic: Ensure Symbol is always first; use "Error" if data missing
     if values:
         row_data = [name, current_date] + values
     else:
-        # Fills with Error but keeps Symbol/Date to maintain row order
+        # Maintaining alignment so your sheet sequence stays perfect
         row_data = [name, current_date, "Error", "Error", "Error", "Error"]
 
     results_batch.append(row_data)
 
-    # Compact request: Send 10 rows at once to stop the Write Error
+    # Batch writing: Send 10 rows at once to avoid Google Sheets API limits
     if len(results_batch) >= 10:
         try:
             output_sheet.update(f'A{batch_start_row}', results_batch)
+            print(f"💾 Saved batch up to row {target_row}")
             results_batch = []
             batch_start_row = None
-            print(f"💾 Saved batch up to row {target_row}")
         except Exception as e:
-            print(f"⚠️ Google Update Error: {e}")
+            print(f"⚠️ Write Error: {e}")
 
-    # Original Checkpoint logic
+    # Preserving your checkpoint system
     with open(checkpoint_file, "w") as f:
         f.write(str(i + 1))
     
     time.sleep(1)
 
-# Final upload for last rows
+# Upload any remaining items at the end
 if results_batch:
     output_sheet.update(f'A{batch_start_row}', results_batch)
 
-print("\n🏁 Scraping sequence completed.")
+print("\n🏁 Scraping process complete.")
