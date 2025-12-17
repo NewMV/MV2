@@ -27,19 +27,30 @@ chrome_options.add_argument("--disable-gpu")
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
 
-# ---------------- GOOGLE SHEETS AUTH & READ ---------------- #
+# ---------------- GOOGLE SHEETS AUTH & DYNAMIC READ ---------------- #
 try:
     gc = gspread.service_account("credentials.json")
     sh = gc.open('New MV2')
     
-    # Updated: Reading from "Stock List"
-    source_sheet = sh.worksheet('Stock List')
+    # Logic to find "Stock List" even if there are hidden spaces
+    all_worksheets = sh.worksheets()
+    source_sheet = None
+    for sheet in all_worksheets:
+        if "stock list" in sheet.title.lower().strip():
+            source_sheet = sheet
+            break
+    
+    if not source_sheet:
+        available = [s.title for s in all_worksheets]
+        print(f"❌ Error: Could not find 'Stock List'. Available tabs: {available}")
+        exit(1)
+
     output_sheet = sh.worksheet('Sheet5')
     
-    # Get all values once to save read requests (Compact/Efficient)
+    # Read data from Google Sheet instead of Github
     all_rows = source_sheet.get_all_values()
     data_rows = all_rows[1:]  # Skip header
-    print(f"✅ Connected. Reading from 'Stock List', Writing to 'Sheet5'.")
+    print(f"✅ Reading from source sheet: {source_sheet.title}")
 except Exception as e:
     print(f"❌ Connection Error: {e}")
     exit(1)
@@ -82,16 +93,16 @@ def scrape_tradingview(company_url):
 
 # ---------------- MAIN LOOP (logic preserved + batching) ---------------- #
 results_batch = []
-# pointer to track the first row of the current batch for output_sheet.update
 batch_start_row = None 
 
 for i, row in enumerate(data_rows):
-    # Maintain original indexing logic
+    # Original sharding logic
     if i < last_i or i < START_INDEX or i > END_INDEX:
         continue
     if i % SHARD_STEP != SHARD_INDEX:
         continue
 
+    # Main logic: Column A is Name, Column D (index 3) is URL
     name = row[0] if len(row) > 0 else f"Row {i}"
     company_url = row[3] if len(row) > 3 else ""
     target_row = i + 2 
@@ -99,7 +110,7 @@ for i, row in enumerate(data_rows):
     if batch_start_row is None:
         batch_start_row = target_row
 
-    print(f"\n📌 Index {i} | {name} | Row: {target_row}")
+    print(f"📌 Index {i} | {name} | Row: {target_row}")
 
     values = scrape_tradingview(company_url)
 
@@ -107,30 +118,29 @@ for i, row in enumerate(data_rows):
     if values:
         row_data = [name, current_date] + values
     else:
-        print(f"⚠️ Marking Row {target_row} as error (preserving sequence)")
+        # Fills with Error but keeps Symbol/Date to maintain row order
         row_data = [name, current_date, "Error", "Error", "Error", "Error"]
 
     results_batch.append(row_data)
 
-    # Compact request: Batch update every 5-10 rows to avoid API quota errors
+    # Compact request: Send 10 rows at once to stop the Write Error
     if len(results_batch) >= 10:
         try:
             output_sheet.update(f'A{batch_start_row}', results_batch)
-            print(f"💾 Batched upload complete up to row {target_row}")
             results_batch = []
             batch_start_row = None
+            print(f"💾 Saved batch up to row {target_row}")
         except Exception as e:
-            print(f"⚠️ Batch update error: {e}")
+            print(f"⚠️ Google Update Error: {e}")
 
-    # Update Checkpoint (Main logic preserved)
+    # Original Checkpoint logic
     with open(checkpoint_file, "w") as f:
         f.write(str(i + 1))
     
     time.sleep(1)
 
-# Final upload for remaining items
+# Final upload for last rows
 if results_batch:
     output_sheet.update(f'A{batch_start_row}', results_batch)
-    print("✅ Final batch uploaded.")
 
-print("\n🏁 Process finished.")
+print("\n🏁 Scraping sequence completed.")
