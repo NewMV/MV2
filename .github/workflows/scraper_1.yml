@@ -36,9 +36,9 @@ jobs:
       - name: Run scraper
         run: |
           export PYTHONUNBUFFERED=1
-          python -X faulthandler run_scraper.py
+          python run_scraper.py
         env:
-          START_INDEX: 1
-          END_INDEX: 2500
+          START_INDEX: 0
+          END_INDEX: 2499
           SHARD_INDEX: ${{ matrix.shard }}
-          SHARD_STEP: 40
+          SHARD_STEP: 10
