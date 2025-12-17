@@ -27,10 +27,20 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Create Google credentials file
+      - name: Create credentials.json from GitHub Secret
         run: |
-          echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > credentials.json
+          cat << 'EOF' > credentials.json
+          ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          EOF
 
-      - name: Run scraper (test mode – 20 symbols)
+      - name: Verify credentials.json
+        run: |
+          python - <<EOF
+          import json
+          json.load(open("credentials.json"))
+          print("✅ credentials.json is valid JSON")
+          EOF
+
+      - name: Run scraper (test – 20 symbols)
         run: |
           python run_scraper.py
