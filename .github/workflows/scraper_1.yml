@@ -1,4 +1,4 @@
-name: Test Stock Scraper (200 Symbols)
+name: Test Stock Scraper (2500 Symbols)
 
 on:
   workflow_dispatch: # Allows manual trigger from the Actions tab
