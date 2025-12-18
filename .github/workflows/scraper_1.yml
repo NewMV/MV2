@@ -1,16 +1,11 @@
-name: Parallel TradingView Scraper
+name: Test Stock Scraper (200 Symbols)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual trigger from the Actions tab
 
 jobs:
-  scrape:
+  scrape_test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # 10 parallel machines (Shards)
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
     steps:
       - name: Checkout Code
@@ -21,16 +16,27 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
-        run: pip install selenium webdriver-manager gspread beautifulsoup4
+      - name: Install Chrome & Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
 
-      - name: Run Scraper
+      - name: Install Python Libraries
+        run: |
+          pip install gspread selenium beautifulsoup4 webdriver-manager
+
+      - name: Create Auth Files from Secrets
+        run: |
+          # Creates the files your Python script expects to see
+          echo '${{ secrets.GSPREAD_CREDENTIALS }}' > credentials.json
+          echo '${{ secrets.TRADINGVIEW_COOKIES }}' > cookies.json
+
+      - name: Run Scraper (First 200 Symbols)
         env:
-          # Your custom secret names
-          GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-          TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
-          SHARD_INDEX: ${{ matrix.shard }}
-          SHARD_STEP: 10
-          START_INDEX: 0
-          END_INDEX: 2500
-        run: python run_scraper.py
+          # Mapping your script variables to the test range
+          START_INDEX: 1
+          END_INDEX: 200
+          SHARD_INDEX: 0
+          SHARD_STEP: 1
+          CHECKPOINT_FILE: "checkpoint_test.txt"
+        run: python main.py # Ensure this matches your actual filename
