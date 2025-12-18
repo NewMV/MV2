@@ -39,4 +39,4 @@ jobs:
           SHARD_INDEX: 0
           SHARD_STEP: 1
           CHECKPOINT_FILE: "checkpoint_test.txt"
-        run: python main.py # Ensure this matches your actual filename
+        run: python run_scraper.py # Ensure this matches your actual filename
