@@ -32,7 +32,7 @@ try:
     client = gspread.service_account(filename="credentials.json")
     source_sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
     dest_sheet   = client.open_by_url(NEW_MV2_URL).worksheet("Sheet5")
-    data_rows = source_sheet.get_all_values()[1:]
+    data_rows = source_sheet.get_all_values()[1:]  # Skip header
     print("✅ Connected. Reading Sheet1, Writing Sheet5")
 except Exception as e:
     print(f"❌ Connection Error: {e}")
@@ -40,7 +40,7 @@ except Exception as e:
 
 current_date = date.today().strftime("%m/%d/%Y")
 
-# ---------------- SELENIUM SHARED SERVICE (FIX) ---------------- #
+# ---------------- SELENIUM SHARED SERVICE ---------------- #
 CHROME_SERVICE = Service(ChromeDriverManager().install())
 
 # ---------------- SCRAPER ---------------- #
@@ -99,40 +99,40 @@ def scrape_tradingview(url):
         driver.quit()
 
 # ---------------- MAIN LOOP ---------------- #
-batch, batch_start = [], None
+# We update rows specifically based on their original index 'i'
+# to ensure the output sheet order matches the input sheet.
 
 for i, row in enumerate(data_rows):
+    # Calculate exact row in Excel/Google Sheets
+    # (i is 0-indexed, headers are row 1, so first data row is 2)
+    target_row = i + 2 
+
+    # Filter logic (Sharding and Range)
     if i < last_i or i < START_INDEX or i > END_INDEX or i % SHARD_STEP != SHARD_INDEX:
         continue
 
     name = row[0]
     url  = row[3] if len(row) > 3 else ""
-    target_row = i + 2
 
-    if batch_start is None:
-        batch_start = target_row
-
-    print(f"🔎 [{i}] {name} -> Row {target_row}")
+    print(f"🔎 [{i}] Processing: {name} -> Targeting Row {target_row}")
 
     vals = scrape_tradingview(url)
+    
+    # Prepare data for this specific row
     row_data = [name, current_date] + (vals if vals else ["Error"] * 6)
-    batch.append(row_data)
 
-    if len(batch) >= 5:
-        try:
-            dest_sheet.update(f"A{batch_start}", batch)
-            print(f"💾 Saved rows {batch_start} to {target_row}")
-            batch, batch_start = [], None
-        except Exception as e:
-            print(f"❌ Write Error: {e}")
+    try:
+        # Update specific row directly to maintain alignment
+        range_label = f"A{target_row}"
+        dest_sheet.update(range_label, [row_data]) 
+        print(f"💾 Saved to Row {target_row}")
+    except Exception as e:
+        print(f"❌ Write Error at Row {target_row}: {e}")
 
+    # Update checkpoint
     with open(checkpoint_file, "w") as f:
         f.write(str(i + 1))
 
     time.sleep(1)
 
-# Final flush
-if batch:
-    dest_sheet.update(f"A{batch_start}", batch)
-
-print("\n🏁 Process finished.")
+print("\n🏁 Process finished. All data aligned with input row numbers.")
