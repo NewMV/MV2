@@ -41,4 +41,4 @@ jobs:
           START_INDEX: 1
           END_INDEX: 2500
           SHARD_INDEX: ${{ matrix.shard }}
-          SHARD_STEP: 10
+          SHARD_STEP: 40
