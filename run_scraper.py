@@ -22,38 +22,24 @@ checkpoint_file = os.getenv("CHECKPOINT_FILE", "checkpoint_new_1.txt")
 last_i = START_INDEX
 if os.path.exists(checkpoint_file):
     with open(checkpoint_file, "r") as f:
-        try:
-            last_i = int(f.read().strip())
-        except:
-            pass
+        try: last_i = int(f.read().strip())
+        except: pass
 
 # ---------------- GOOGLE SHEETS AUTH ---------------- #
 try:
-    # UPDATED: Support for GitHub Secret 'GSPREAD_CREDENTIALS'
     creds_json = os.getenv("GSPREAD_CREDENTIALS")
-    if creds_json:
-        client = gspread.service_account_from_dict(json.loads(creds_json))
-    else:
-        client = gspread.service_account(filename="credentials.json")
-        
+    client = gspread.service_account_from_dict(json.loads(creds_json)) if creds_json else gspread.service_account(filename="credentials.json")
     source_sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
     dest_sheet   = client.open_by_url(NEW_MV2_URL).worksheet("Sheet5")
     data_rows = source_sheet.get_all_values()[1:]
-    print("✅ Connected. Reading Sheet1, Writing Sheet5")
+    print("✅ Connected.")
 except Exception as e:
-    print(f"❌ Connection Error: {e}")
-    raise
+    print(f"❌ Connection Error: {e}"); raise
 
 current_date = date.today().strftime("%m/%d/%Y")
 
-# ---------------- SELENIUM SHARED SERVICE ---------------- #
-CHROME_SERVICE = Service(ChromeDriverManager().install())
-
-# ---------------- SCRAPER ---------------- #
-def scrape_tradingview(url):
-    if not url:
-        return []
-
+# ---------------- OPTIMIZED SCRAPER ---------------- #
+def get_driver():
     opts = Options()
     opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
@@ -62,90 +48,67 @@ def scrape_tradingview(url):
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
     opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
-
-    driver = webdriver.Chrome(service=CHROME_SERVICE, options=opts)
+    
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    return driver
 
+def scrape_tradingview(driver, url):
+    if not url: return []
     try:
         driver.get(url)
+        wait = WebDriverWait(driver, 15) # Reduced timeout for speed, handled by retry
+        target_class = "valueValue-l31H9iuA"
         
-        # 1. Wait for the main container
-        wait = WebDriverWait(driver, 30)
-        target_class = "valueValue-l31H9iuA" # Using a partial class name for stability
+        # WAIT until the elements have actual numbers (prevents "Error" / empty results)
+        def data_is_ready(d):
+            els = d.find_elements(By.CLASS_NAME, target_class)
+            return any(any(c.isdigit() for c in e.text) for e in els[:3]) if els else False
+
+        wait.until(data_is_ready)
         
-        wait.until(EC.presence_of_element_located((By.CLASS_NAME, target_class)))
-
-        # 2. Advanced Check: Wait until at least one value is a number (not empty or '-')
-        # This prevents scraping "Skeleton" loaders
-        def data_is_loaded(d):
-            elements = d.find_elements(By.CLASS_NAME, target_class)
-            if not elements: return False
-            # Check if the first few elements actually have text/numbers
-            return any(any(char.isdigit() for char in el.text) for el in elements[:3])
-
-        try:
-            wait.until(data_is_loaded)
-        except:
-            print(f"⚠️ Timeout waiting for values to populate at {url}")
-
-        # Final small buffer for DOM stability
-        time.sleep(1.5)
-
         soup = BeautifulSoup(driver.page_source, "html.parser")
-        results = [
-            el.get_text()
-              .replace('−', '-')
-              .replace('∅', '')
-              .strip()
-            for el in soup.find_all("div", class_="valueValue-l31H9iuA")
-        ]
-        
-        # If we got empty values, return a list of "Loading..." or handle as error
-        return results if any(results) else []
-
+        vals = [el.get_text().replace('−', '-').replace('∅', '').strip() 
+                for el in soup.find_all("div", class_=target_class)]
+        return vals if any(vals) else []
     except Exception as e:
-        print(f"⚠️ Scrape Fail: {e}")
+        print(f"  ⚠️ Timeout/Fail for URL: {url[-20:]}")
         return []
 
-    finally:
-        driver.quit()
-
-# ---------------- MAIN LOOP (Original Logic Maintained) ---------------- #
+# ---------------- MAIN LOOP ---------------- #
+driver = get_driver()
 batch, batch_start = [], None
 
-for i, row in enumerate(data_rows):
-    if i < last_i or i < START_INDEX or i > END_INDEX or i % SHARD_STEP != SHARD_INDEX:
-        continue
+try:
+    for i, row in enumerate(data_rows):
+        if i < last_i or i < START_INDEX or i > END_INDEX or i % SHARD_STEP != SHARD_INDEX:
+            continue
 
-    name = row[0]
-    url  = row[3] if len(row) > 3 else ""
-    target_row = i + 2
+        name, url = row[0], row[3] if len(row) > 3 else ""
+        target_row = i + 2
+        if batch_start is None: batch_start = target_row
 
-    if batch_start is None:
-        batch_start = target_row
+        print(f"🔎 [{i}] {name}", end="\r")
+        
+        vals = scrape_tradingview(driver, url)
+        
+        # Fill with "Error" if scrape failed, but keep column structure
+        row_data = [name, current_date] + (vals if vals else ["Error"] * 10)
+        batch.append(row_data)
 
-    print(f"🔎 [{i}] {name} -> Row {target_row}")
-
-    vals = scrape_tradingview(url)
-    row_data = [name, current_date] + (vals if vals else ["Error"] * 6)
-    batch.append(row_data)
-
-    if len(batch) >= 5:
-        try:
+        # Batch update to Google Sheets (Every 5 stocks)
+        if len(batch) >= 5:
             dest_sheet.update(f"A{batch_start}", batch)
-            print(f"💾 Saved rows {batch_start} to {target_row}")
+            print(f"💾 Saved batch up to Row {target_row}         ")
             batch, batch_start = [], None
-            time.sleep(2) # Prevent API Rate limits
-        except Exception as e:
-            print(f"❌ Write Error: {e}")
+            time.sleep(1) # Small pause for Google API
 
-    with open(checkpoint_file, "w") as f:
-        f.write(str(i + 1))
+        with open(checkpoint_file, "w") as f:
+            f.write(str(i + 1))
 
-    time.sleep(1)
+    if batch: # Final flush
+        dest_sheet.update(f"A{batch_start}", batch)
 
-# Final flush
-if batch:
-    dest_sheet.update(f"A{batch_start}", batch)
-
-print("\n🏁 Process finished.")
+finally:
+    driver.quit()
+    print("\n🏁 Process finished.")
