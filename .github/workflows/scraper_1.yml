@@ -31,4 +31,4 @@ jobs:
           SHARD_STEP: 10 # Total number of shards in matrix
           START_INDEX: 0
           END_INDEX: 2500
-        run: python runscraper.py
+        run: python run_scraper.py
