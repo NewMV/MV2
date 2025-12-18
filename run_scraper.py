@@ -17,7 +17,7 @@ SHARD_INDEX = int(os.getenv("SHARD_INDEX", "0"))
 SHARD_STEP  = int(os.getenv("SHARD_STEP", "1"))
 START_INDEX = int(os.getenv("START_INDEX", "1"))
 END_INDEX   = int(os.getenv("END_INDEX", "2500"))
-checkpoint_file = os.getenv("CHECKPOINT_FILE", "checkpoint_new_1.txt")
+checkpoint_file = os.getenv("CHECKPOINT_FILE", f"checkpoint_{SHARD_INDEX}.txt")
 
 last_i = START_INDEX
 if os.path.exists(checkpoint_file):
@@ -29,129 +29,114 @@ if os.path.exists(checkpoint_file):
 
 # ---------------- GOOGLE SHEETS AUTH ---------------- #
 try:
-    # UPDATED: Support for GitHub Secret 'GSPREAD_CREDENTIALS'
-    creds_json = os.getenv("GSPREAD_CREDENTIALS")
-    if creds_json:
-        client = gspread.service_account_from_dict(json.loads(creds_json))
-    else:
-        client = gspread.service_account(filename="credentials.json")
-        
+    # Prioritize Service Account JSON file (created by YAML)
+    client = gspread.service_account(filename="credentials.json")
     source_sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
     dest_sheet   = client.open_by_url(NEW_MV2_URL).worksheet("Sheet5")
     data_rows = source_sheet.get_all_values()[1:]
-    print("✅ Connected. Reading Sheet1, Writing Sheet5")
+    print(f"✅ Shard {SHARD_INDEX} Connected. Reading Sheet1, Writing Sheet5")
 except Exception as e:
     print(f"❌ Connection Error: {e}")
     raise
 
 current_date = date.today().strftime("%m/%d/%Y")
 
-# ---------------- SELENIUM SHARED SERVICE ---------------- #
-CHROME_SERVICE = Service(ChromeDriverManager().install())
-
-# ---------------- SCRAPER ---------------- #
-def scrape_tradingview(url):
-    if not url:
-        return []
-
+# ---------------- BROWSER SETUP (REUSABLE) ---------------- #
+def init_driver():
     opts = Options()
     opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
-    
-    # --- STEALTH ADDITIONS: Prevent Bot Detection ---
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
     opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
-
-    driver = webdriver.Chrome(service=CHROME_SERVICE, options=opts)
+    
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=opts)
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    return driver
 
+# ---------------- SCRAPER LOGIC ---------------- #
+def scrape_tradingview(driver, url):
+    if not url: return []
     try:
-        if os.path.exists("cookies.json"):
-            driver.get("https://www.tradingview.com/")
-            with open("cookies.json", "r") as f:
-                for c in json.load(f):
-                    try:
-                        driver.add_cookie({
-                            "name": c.get("name"),
-                            "value": c.get("value"),
-                            "domain": c.get("domain", ".tradingview.com"),
-                            "path": c.get("path", "/")
-                        })
-                    except:
-                        pass
-            driver.refresh()
-
         driver.get(url)
-        
-        # --- YOUR ORIGINAL XPATH LOGIC ---
-        WebDriverWait(driver, 40).until(
-            EC.visibility_of_element_located((
-                By.XPATH,
-                '/html/body/div[2]/div/div[5]/div/div[1]/div/div[2]/div[1]/div[2]/div/div[1]/div[2]/div[2]/div[2]/div[2]/div'
-            ))
+        # Use your specific XPATH logic
+        WebDriverWait(driver, 30).until(
+            EC.visibility_of_element_located((By.XPATH, '/html/body/div[2]/div/div[5]/div/div[1]/div/div[2]/div[1]/div[2]/div/div[1]/div[2]/div[2]/div[2]/div[2]/div'))
         )
+        time.sleep(1) # Short wait for JS stabilization
         
-        # Give the JS 2 seconds to load data into the elements
-        time.sleep(2)
-
         soup = BeautifulSoup(driver.page_source, "html.parser")
         return [
-            el.get_text()
-              .replace('−', '-')
-              .replace('∅', '')
-              .strip()
-            for el in soup.find_all(
-                "div",
-                class_="valueValue-l31H9iuA apply-common-tooltip"
-            )
+            el.get_text().replace('−', '-').replace('∅', '').strip()
+            for el in soup.find_all("div", class_="valueValue-l31H9iuA apply-common-tooltip")
         ]
-
     except Exception as e:
-        print(f"⚠️ Scrape Fail: {e}")
+        print(f"  ⚠️ Scrape Fail: {e}")
         return []
 
-    finally:
-        driver.quit()
+# ---------------- MAIN EXECUTION ---------------- #
+driver = init_driver()
 
-# ---------------- MAIN LOOP (Original Logic Maintained) ---------------- #
-batch, batch_start = [], None
+# Load Cookies Once
+if os.path.exists("cookies.json"):
+    try:
+        driver.get("https://www.tradingview.com/")
+        with open("cookies.json", "r") as f:
+            for c in json.load(f):
+                try: driver.add_cookie(c)
+                except: pass
+        driver.refresh()
+        print("🍪 Cookies injected successfully")
+    except Exception as e:
+        print(f"⚠️ Cookie Error: {e}")
 
-for i, row in enumerate(data_rows):
-    if i < last_i or i < START_INDEX or i > END_INDEX or i % SHARD_STEP != SHARD_INDEX:
-        continue
+batch = []
+batch_start_row = None
 
-    name = row[0]
-    url  = row[3] if len(row) > 3 else ""
-    target_row = i + 2
+try:
+    for i, row in enumerate(data_rows):
+        # Sharding & Range Logic
+        if i < last_i or i < START_INDEX or i > END_INDEX or i % SHARD_STEP != SHARD_INDEX:
+            continue
 
-    if batch_start is None:
-        batch_start = target_row
+        target_row = i + 2
+        name = row[0]
+        url = row[3] if len(row) > 3 else ""
+        
+        if batch_start_row is None:
+            batch_start_row = target_row
 
-    print(f"🔎 [{i}] {name} -> Row {target_row}")
+        print(f"🔎 [{i}] Processing: {name} (Row {target_row})")
+        
+        vals = scrape_tradingview(driver, url)
+        row_data = [name, current_date] + (vals if vals else ["Error"] * 6)
+        batch.append(row_data)
 
-    vals = scrape_tradingview(url)
-    row_data = [name, current_date] + (vals if vals else ["Error"] * 6)
-    batch.append(row_data)
+        # Update Google Sheets every 5 rows (Batching)
+        if len(batch) >= 5:
+            try:
+                dest_sheet.update(f"A{batch_start_row}", batch)
+                print(f"💾 Saved Batch: Rows {batch_start_row} to {target_row}")
+                batch = []
+                batch_start_row = None
+                time.sleep(1) # Avoid Google API rate limits
+            except Exception as e:
+                print(f"❌ Batch Write Error: {e}")
 
-    if len(batch) >= 5:
-        try:
-            dest_sheet.update(f"A{batch_start}", batch)
-            print(f"💾 Saved rows {batch_start} to {target_row}")
-            batch, batch_start = [], None
-            time.sleep(2) # Prevent API Rate limits
-        except Exception as e:
-            print(f"❌ Write Error: {e}")
+        # Update Checkpoint
+        with open(checkpoint_file, "w") as f:
+            f.write(str(i + 1))
 
-    with open(checkpoint_file, "w") as f:
-        f.write(str(i + 1))
-
-    time.sleep(1)
-
-# Final flush
-if batch:
-    dest_sheet.update(f"A{batch_start}", batch)
-
-print("\n🏁 Process finished.")
+except KeyboardInterrupt:
+    print("🛑 Process interrupted by user.")
+finally:
+    # Final flush for any remaining items in the batch
+    if batch and batch_start_row:
+        dest_sheet.update(f"A{batch_start_row}", batch)
+        print(f"💾 Final Batch Saved: Starting Row {batch_start_row}")
+    
+    driver.quit()
+    print("🏁 Shard Process Finished.")
