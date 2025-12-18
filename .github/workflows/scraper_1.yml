@@ -35,7 +35,7 @@ jobs:
         env:
           # Mapping your script variables to the test range
           START_INDEX: 1
-          END_INDEX: 200
+          END_INDEX: 2500
           SHARD_INDEX: 0
           SHARD_STEP: 1
           CHECKPOINT_FILE: "checkpoint_test.txt"
