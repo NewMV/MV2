@@ -58,8 +58,6 @@ def scrape_tradingview(url):
     opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
-    
-    # --- STEALTH ADDITIONS: Prevent Bot Detection ---
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
@@ -69,45 +67,41 @@ def scrape_tradingview(url):
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
     try:
-        if os.path.exists("cookies.json"):
-            driver.get("https://www.tradingview.com/")
-            with open("cookies.json", "r") as f:
-                for c in json.load(f):
-                    try:
-                        driver.add_cookie({
-                            "name": c.get("name"),
-                            "value": c.get("value"),
-                            "domain": c.get("domain", ".tradingview.com"),
-                            "path": c.get("path", "/")
-                        })
-                    except:
-                        pass
-            driver.refresh()
-
         driver.get(url)
         
-        # --- YOUR ORIGINAL XPATH LOGIC ---
-        WebDriverWait(driver, 40).until(
-            EC.visibility_of_element_located((
-                By.XPATH,
-                '/html/body/div[2]/div/div[5]/div/div[1]/div/div[2]/div[1]/div[2]/div/div[1]/div[2]/div[2]/div[2]/div[2]/div'
-            ))
-        )
+        # 1. Wait for the main container
+        wait = WebDriverWait(driver, 30)
+        target_class = "valueValue-l31H9iuA" # Using a partial class name for stability
         
-        # Give the JS 2 seconds to load data into the elements
-        time.sleep(2)
+        wait.until(EC.presence_of_element_located((By.CLASS_NAME, target_class)))
+
+        # 2. Advanced Check: Wait until at least one value is a number (not empty or '-')
+        # This prevents scraping "Skeleton" loaders
+        def data_is_loaded(d):
+            elements = d.find_elements(By.CLASS_NAME, target_class)
+            if not elements: return False
+            # Check if the first few elements actually have text/numbers
+            return any(any(char.isdigit() for char in el.text) for el in elements[:3])
+
+        try:
+            wait.until(data_is_loaded)
+        except:
+            print(f"⚠️ Timeout waiting for values to populate at {url}")
+
+        # Final small buffer for DOM stability
+        time.sleep(1.5)
 
         soup = BeautifulSoup(driver.page_source, "html.parser")
-        return [
+        results = [
             el.get_text()
               .replace('−', '-')
               .replace('∅', '')
               .strip()
-            for el in soup.find_all(
-                "div",
-                class_="valueValue-l31H9iuA apply-common-tooltip"
-            )
+            for el in soup.find_all("div", class_="valueValue-l31H9iuA")
         ]
+        
+        # If we got empty values, return a list of "Loading..." or handle as error
+        return results if any(results) else []
 
     except Exception as e:
         print(f"⚠️ Scrape Fail: {e}")
