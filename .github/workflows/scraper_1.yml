@@ -1,9 +1,7 @@
-name: TradingView Scraper Batch 1
+name: Parallel TradingView Scraper
 
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'
+  workflow_dispatch: # Allows manual start
 
 jobs:
   scrape:
@@ -11,34 +9,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0,1,2,3,4,5,6,7,8,9]
+        # Create 10 parallel instances (Shard 0 to 9)
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pandas requests gspread selenium beautifulsoup4 openpyxl webdriver-manager
+      - name: Install Dependencies
+        run: pip install selenium webdriver-manager gspread beautifulsoup4
 
-      - name: Create secrets files
-        run: |
-          echo "$GSPREAD_CREDENTIALS" > credentials.json
-          echo "$TRADINGVIEW_COOKIES" > cookies.json
+      - name: Run Scraper Shard ${{ matrix.shard }}
         env:
-          GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-          TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
-
-      - name: Run scraper
-        run: |
-          export PYTHONUNBUFFERED=1
-          python -X faulthandler run_scraper.py
-        env:
-          START_INDEX: 1
-          END_INDEX: 2500
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }} # Set this in GitHub Secrets
           SHARD_INDEX: ${{ matrix.shard }}
-          SHARD_STEP: 40
+          SHARD_STEP: 10 # Total number of shards in matrix
+          START_INDEX: 0
+          END_INDEX: 2500
+        run: python runscraper.py
