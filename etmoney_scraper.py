@@ -4,15 +4,16 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 from webdriver_manager.chrome import ChromeDriverManager
 import re
 
-# ---------------- CONFIG - YOUR SHEETS ---------------- #
-STOCK_LIST_URL = "https://docs.google.com/spreadsheets/d/1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4/edit?gid=0#gid=0"  # ← Stock List (READ Column A)
-NEW_MV2_URL    = "https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc/edit?gid=0#gid=0"  # ← NewMV2 Sheet6 (WRITE)
+# ---------------- CONFIG ---------------- #
+STOCK_LIST_URL = "https://docs.google.com/spreadsheets/d/1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4/edit?gid=0#gid=0"
+NEW_MV2_URL    = "https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc/edit?gid=0#gid=0"
 
 def get_driver():
     opts = Options()
@@ -23,22 +24,19 @@ def get_driver():
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option('useAutomationExtension', False)
-    opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+    opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
     return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
 
 def scrape_sector_etmoney(driver, symbol):
-    """Scrape sector from ET Money using search (works for ANY symbol)"""
     try:
-        print(f"  🔍 Searching ET Money for {symbol}")
-        
-        # Go to ET Money stocks page
+        print(f"  🔍 Searching: {symbol}")
         driver.get("https://www.etmoney.com/stocks")
         wait = WebDriverWait(driver, 10)
         
-        # Find search box (updated selector)
+        # Multiple search box selectors
         search_selectors = [
             "//input[@placeholder*='Search']",
-            "//input[@placeholder*='stock']", 
+            "//input[@placeholder*='stock']",
             "//input[contains(@class,'search')]",
             "//input[@role='combobox']"
         ]
@@ -54,155 +52,111 @@ def scrape_sector_etmoney(driver, symbol):
         if not search_box:
             return "NO_SEARCH_BOX"
             
-        # Type symbol and hit enter
         search_box.clear()
         search_box.send_keys(symbol)
         time.sleep(2)
         search_box.send_keys(Keys.ENTER)
-        time.sleep(4)  # Wait for redirect
+        time.sleep(4)
         
-        # Extract sector from stock page
         soup = BeautifulSoup(driver.page_source, "html.parser")
         sector = extract_sector(soup)
-        
-        return sector if sector else "NO_SECTOR"
+        return sector or "NO_SECTOR"
         
     except Exception as e:
-        print(f"  ❌ Error {symbol}: {str(e)[:60]}")
-        return "ERROR"
+        return f"ERROR: {str(e)[:30]}"
 
 def extract_sector(soup):
-    """Multi-method sector extraction"""
-    
-    # Method 1: Look for "Sector: XYZ" patterns
-    patterns = [
-        r'Sector[:\s]*([A-Z][A-Za-z\s\-&/]+?)(?:\s|$)',
-        r'Industry[:\s]*([A-Z][A-Za-z\s\-&/]+?)(?:\s|$)'
-    ]
-    
+    # Method 1: Direct patterns
+    patterns = [r'Sector[:\s]*([A-Z][A-Za-z\s\-&/]+?)(?:\s|$)', r'Industry[:\s]*([A-Z][A-Za-z\s\-&/]+?)(?:\s|$)']
     all_text = soup.get_text()
     for pattern in patterns:
         match = re.search(pattern, all_text, re.I)
         if match:
             return match.group(1).strip()
     
-    # Method 2: Look in tables
-    tables = soup.find_all('table')
-    for table in tables:
-        rows = table.find_all('tr')
-        for row in rows:
+    # Method 2: Tables
+    for table in soup.find_all('table'):
+        for row in table.find_all('tr'):
             cells = row.find_all(['td', 'th'])
             if len(cells) >= 2:
-                row_text = ' '.join(c.get_text(strip=True) for c in cells).lower()
-                if 'sector' in row_text or 'industry' in row_text:
-                    for cell in cells[1:]:  # Skip header
-                        text = cell.get_text(strip=True)
-                        if len(text) > 2 and any(word in text.upper() for word in ['IT', 'BANK', 'FINANCE', 'AUTO']):
-                            return text.strip()
-    
-    # Method 3: Breadcrumb/URL sector
-    breadcrumbs = soup.find_all(['nav', 'ol', 'div'], class_=re.compile(r'breadcrumb|path', re.I))
-    for bc in breadcrumbs:
-        text = bc.get_text()
-        if any(sector in text.upper() for sector in ['IT', 'BANK', 'FINANCE', 'AUTO', 'PHARMA']):
-            return text.strip()
-    
+                text = ' '.join(c.get_text(strip=True) for c in cells)
+                if 'sector' in text.lower():
+                    for cell in cells[1:]:
+                        sector = cell.get_text(strip=True)
+                        if len(sector) > 2:
+                            return sector.strip()
     return None
 
-def read_symbols_from_stock_list(client):
-    """READ Column A from Stock List → Sheet1"""
-    try:
-        sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
-        all_data = sheet.get_all_values()
-        
-        # Column A (index 0), skip header row, clean empty cells
-        symbols = [row[0].strip().upper() for row in all_data[1:] if row and row[0] and row[0].strip()]
-        
-        print(f"📖 ✅ Read {len(symbols)} symbols from Stock List Sheet1 Column A")
-        print(f"📋 First 5: {symbols[:5]}")
-        return symbols
-    except Exception as e:
-        print(f"❌ ❌ Failed to read Stock List: {e}")
-        return []
+def read_symbols(client):
+    sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
+    all_data = sheet.get_all_values()
+    symbols = [row[0].strip().upper() for row in all_data[1:] if row and row[0].strip()]
+    print(f"📖 Read {len(symbols)} symbols")
+    return symbols
 
-def write_results_to_newmv2(client, results):
-    """WRITE [Symbol, Sector, Date] to NewMV2 → Sheet6"""
+def write_batch(client, batch_data):
+    """Write batch to Sheet6 - APPEND MODE"""
     try:
         sheet = client.open_by_url(NEW_MV2_URL).worksheet("Sheet6")
-        
-        # Clear existing data and add header
-        sheet.clear()
-        sheet.append_row(["Symbol", "Sector", "Scraped_Date"])
-        print("🗑️  ✅ Cleared Sheet6 and added header")
-        
-        # Write results in batches
-        batch_size = 10
-        for i in range(0, len(results), batch_size):
-            batch = results[i:i+batch_size]
-            sheet.append_rows(batch)
-            print(f"💾 ✅ Wrote batch {i//batch_size + 1} ({len(batch)} rows)")
-            time.sleep(1)  # Rate limit
-        
-        print(f"🎉 ✅ SUCCESS: Wrote {len(results)} rows to NewMV2 Sheet6")
+        sheet.append_rows(batch_data)
+        print(f"💾 Wrote {len(batch_data)} rows")
         return True
-        
     except Exception as e:
-        print(f"❌ ❌ Failed to write to NewMV2 Sheet6: {e}")
+        print(f"❌ Batch write failed: {e}")
         return False
 
-# ---------------- MAIN - READY TO RUN ---------------- #
 def main():
     driver = None
+    client = None
+    BATCH_SIZE = 5
+    
     try:
-        # 1. Google Sheets Setup
-        print("🔐 Connecting to Google Sheets...")
+        # Auth - ENV first, then file
         creds_json = os.getenv("GSPREAD_CREDENTIALS")
         if creds_json:
             client = gspread.service_account_from_dict(json.loads(creds_json))
-        else:
+            print("🔐 ENV auth")
+        elif os.path.exists("credentials.json"):
             client = gspread.service_account(filename="credentials.json")
-        print("✅ Google Sheets connected!")
+            print("🔐 File auth")
+        else:
+            raise Exception("No credentials!")
         
-        # 2. READ symbols from Stock List Sheet1 Column A
-        symbols = read_symbols_from_stock_list(client)
+        # Read symbols
+        symbols = read_symbols(client)
         if not symbols:
-            print("❌ No symbols found. Check Stock List Sheet1 Column A")
             return
         
-        # 3. Start scraping
-        print(f"\n🚀 Starting scrape for {len(symbols)} symbols...")
+        # Scrape
         driver = get_driver()
+        batch = []
         
-        results = []
         for i, symbol in enumerate(symbols, 1):
-            print(f"\n[{i}/{len(symbols)}] 🕐 Scraping {symbol}...")
+            print(f"\n[{i}/{len(symbols)}] {symbol}")
             sector = scrape_sector_etmoney(driver, symbol)
-            print(f"   ✅ Found: '{sector}'")
+            print(f"   ✅ {sector}")
             
-            results.append([symbol, sector, date.today().strftime("%d/%m/%Y")])
+            batch.append([symbol, sector, date.today().strftime("%d/%m/%Y")])
             
-            # Human-like delay
-            delay = random.uniform(5, 8)
-            print(f"   ⏳ Waiting {delay:.1f}s...")
-            time.sleep(delay)
+            # Write batch when full
+            if len(batch) >= BATCH_SIZE:
+                write_batch(client, batch)
+                batch = []
+                time.sleep(random.uniform(3, 5))
+            
+            time.sleep(random.uniform(4, 7))
         
-        # 4. WRITE results to NewMV2 Sheet6
-        print("\n📝 Writing results...")
-        success = write_results_to_newmv2(client, results)
+        # Final batch
+        if batch:
+            write_batch(client, batch)
         
-        if success:
-            print(f"\n🎊 ALL DONE! {len(results)} symbols scraped → NewMV2 Sheet6")
-        else:
-            print("❌ Write failed - check credentials/sheet access")
-            
-    except KeyboardInterrupt:
-        print("\n⏹️  Stopped by user")
+        print(f"\n🎉 COMPLETED: {len(symbols)} symbols scraped!")
+        
     except Exception as e:
-        print(f"\n💥 CRASH: {e}")
+        print(f"💥 Error: {e}")
     finally:
         if driver:
             driver.quit()
-        print("🏁 Chrome closed. Script finished.")
 
 if __name__ == "__main__":
     main()
