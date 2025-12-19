@@ -17,9 +17,9 @@ CHUNK_START = int(os.getenv('CHUNK_START', 0))
 CHUNK_END   = int(os.getenv('CHUNK_END', 2500))
 BATCH_SIZE  = 20
 
-# Slugs where you know the exact ET Money path/id
+# Known ET Money slugs (you can extend this gradually)
 SYMBOL_ETMONEY_MAP = {
-    '20MICRONS': '20-microns-ltd/2758',      # Mining/Minerals pill [web:65][web:79]
+    '20MICRONS': '20-microns-ltd/2758',
     '360ONE': '360-one-wam-ltd/1035',
     '3IINFOLTD': '3i-infotech-ltd/348',
     '3MINDIA': '3m-india-ltd/1004',
@@ -28,7 +28,7 @@ SYMBOL_ETMONEY_MAP = {
     'A2ZINFRA': 'a2z-infra-engineering-ltd/1007',
 }
 
-# ---------- Browser + API helpers ----------
+# ---------- Selenium + API helpers ----------
 
 def get_driver():
     opts = Options()
@@ -51,6 +51,7 @@ def build_etmoney_url(symbol: str) -> str:
     slug = SYMBOL_ETMONEY_MAP.get(symbol)
     if slug:
         return base + slug
+    # generic pattern; works for many but not all tickers
     return base + f"{symbol.lower()}-ltd"
 
 def get_nse_sector_api(symbol):
@@ -73,65 +74,75 @@ def get_nse_sector_api(symbol):
 
 def extract_sector_badge_from_soup(soup: BeautifulSoup, symbol: str) -> str:
     """
-    Only look inside the main header and pick <a> links whose href
-    contains '/stocks/sector/' → these are sector pills like Mining/Minerals,
-    IT - Software, Sugar, etc. [web:79][web:96][web:101]
+    Look inside the header block and pick <a> whose href matches
+    /stocks/sector/<slug>/<numeric-id>. The text is the pill value. [web:79][web:96][web:101]
     """
     header = soup.select_one("#page-container div.w-full.col-span-8")
     if not header:
         print(f"  ⚠ header not found for {symbol}")
         return "NO_DATA"
 
-    links = header.select("a")
-    print(f"  ℹ {len(links)} header links for {symbol}")
-
-    for a in header.select("a[href*='/stocks/sector/']"):
+    for a in header.select("a[href^='/stocks/sector/']"):
+        href = a.get("href") or ""
         text = a.get_text(strip=True)
-        if text:
-            print(f"  ✅ sector pill: {text}")
+        last = href.rstrip("/").split("/")[-1]
+        if text and last.isdigit():
+            print(f"  ✅ BS sector pill: {text} ({href})")
             return text
 
-    print(f"  ⚠ no sector pill link for {symbol}")
+    print(f"  ⚠ no sector pill link in header for {symbol}")
     return "NO_DATA"
 
 def get_sector(symbol: str, driver) -> str:
     """
-    1) Wait until sector pill is visible and read it.
-    2) If pill never appears, fall back to NSE API.
+    1) Wait for sector-pill links.
+    2) Choose one with numeric id in href.
+    3) Fallback to NSE if no pill. [web:6]
     """
     try:
         url = build_etmoney_url(symbol)
         print(f"🌐 {symbol} → {url}")
         driver.get(url)
 
-        # Wait for page load
         WebDriverWait(driver, 20).until(
             lambda d: d.execute_script("return document.readyState") == "complete"
         )
 
-        wait = WebDriverWait(driver, 10)
-
-        # Explicit wait: at least one <a> with /stocks/sector/ in href inside header
+        locator = (
+            By.CSS_SELECTOR,
+            "#page-container div.w-full.col-span-8 a[href^='/stocks/sector/']"
+        )
         try:
-            locator = (By.CSS_SELECTOR, "#page-container div.w-full.col-span-8 a[href*='/stocks/sector/']")
-            elem = wait.until(EC.visibility_of_element_located(locator))
-            text = elem.text.strip()
-            if text:
-                print(f"  ✅ waited pill: {text}")
-                return text
-        except Exception:
-            print(f"  ⚠ sector pill not visible yet for {symbol}, using BeautifulSoup fallback")
+            elems = WebDriverWait(driver, 8).until(
+                EC.presence_of_all_elements_located(locator)
+            )
+            chosen = None
+            for el in elems:
+                href = el.get_attribute("href") or ""
+                text = el.text.strip()
+                # href is absolute; keep only path
+                path = "/" + "/".join(href.split("/", 3)[3:]) if "://" in href else href
+                last = path.rstrip("/").split("/")[-1]
+                if text and last.isdigit():
+                    chosen = text
+                    print(f"  ✅ Selenium sector pill: {text} ({path})")
+                    break
 
-        # Fallback: BeautifulSoup scan of header
+            if chosen:
+                return chosen
+            else:
+                print("  ⚠ Selenium found sector links but none with numeric id, using BS")
+        except Exception:
+            print("  ⚠ no sector link via Selenium, using BS")
+
         soup = BeautifulSoup(driver.page_source, "html.parser")
         sector = extract_sector_badge_from_soup(soup, symbol)
         if sector != "NO_DATA":
             return sector
 
     except Exception as e:
-        print(f"  ❌ Selenium/NAV error for {symbol}: {e}")
+        print(f"  ❌ Selenium/navigation error for {symbol}: {e}")
 
-    # FINAL fallback: NSE API (never returns NO_DATA if NSE knows it) [web:6]
     api_sector = get_nse_sector_api(symbol)
     if api_sector:
         print(f"  🔁 NSE fallback: {api_sector}")
