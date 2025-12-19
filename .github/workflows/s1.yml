@@ -32,4 +32,4 @@ jobs:
         SHARD_INDEX: 0
         SHARD_STEP: 5
         CHECKPOINT_FILE: "checkpoint_chunk0.txt"
-      run: python tradingview_scraper.py
+      run: python run_scraper.py
