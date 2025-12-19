@@ -2,7 +2,7 @@ name: TradingView Chunk 1 (500-999)
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 7 * * 2'
+    - cron: '0 7 * * 2'  # Tuesday 7AM IST
 jobs:
   scrape:
     runs-on: ubuntu-latest
@@ -33,3 +33,14 @@ jobs:
         SHARD_STEP: 5
         CHECKPOINT_FILE: "checkpoint_chunk1.txt"
       run: python run_scraper.py
+    - name: 📊 Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: tradingview-500-999-${{ github.run_id }}
+        path: |
+          checkpoint_*.txt
+          credentials.json
+          cookies.json
+          *.log
+        retention-days: 30
