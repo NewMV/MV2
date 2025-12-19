@@ -4,6 +4,8 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 from webdriver_manager.chrome import ChromeDriverManager
 import re
@@ -21,6 +23,10 @@ SYMBOL_ETMONEY_MAP = {
     '3MINDIA': '3m-india-ltd/1004', '5PAISA': '5paisa-capital-ltd/1005',
     '63MOONS': '63-moons-technologies-ltd/1006', 'A2ZINFRA': 'a2z-infra-engineering-ltd/1007',
 }
+
+# 🎯 YOUR EXACT SELECTORS
+EXACT_SECTOR_SELECTOR = "#page-container > div.bg-white-color.w-full.mt-4.mb-3\\.5 > div > div > div.w-full.col-span-8 > div > div > div > a"
+SHORT_SECTOR_SELECTOR = "div.w-full.col-span-8 div > div > div > a"
 
 def get_driver():
     opts = Options()
@@ -43,49 +49,91 @@ def get_nse_sector_api(symbol):
     except: pass
     return None
 
-def scrape_sector_direct(driver, symbol):
+def extract_sector_exact(soup):
+    """🎯 Extract from YOUR EXACT CSS selector"""
+    
+    # 1. YOUR EXACT SELECTOR (priority #1)
+    element = soup.select_one(EXACT_SECTOR_SELECTOR)
+    if element:
+        sector_text = element.get_text(strip=True)
+        if sector_text and len(sector_text) > 2:
+            return sector_text.strip()
+    
+    # 2. SHORT VERSION (backup)
+    element = soup.select_one(SHORT_SECTOR_SELECTOR)
+    if element:
+        sector_text = element.get_text(strip=True)
+        if sector_text and len(sector_text) > 2:
+            return sector_text.strip()
+    
+    return None
+
+def scrape_sector_selenium(driver, symbol):
+    """🎯 Selenium + YOUR EXACT SELECTOR (most reliable)"""
     try:
         slug = SYMBOL_ETMONEY_MAP.get(symbol)
-        if slug:
-            driver.get(f"https://www.etmoney.com/stocks/{slug}")
-            WebDriverWait(driver, 10).until(lambda d: d.execute_script("return document.readyState") == "complete")
-            time.sleep(2); soup = BeautifulSoup(driver.page_source, "html.parser")
-            sector = extract_sector(soup)
-            if sector and sector != "NO_DATA": return sector
+        url = f"https://www.etmoney.com/stocks/{slug}" if slug else f"https://www.etmoney.com/stocks/{symbol.lower()}-ltd"
         
-        driver.get(f"https://www.etmoney.com/stocks/{symbol.lower()}-ltd")
-        WebDriverWait(driver, 10).until(lambda d: d.execute_script("return document.readyState") == "complete")
-        time.sleep(2)
-        return extract_sector(BeautifulSoup(driver.page_source, "html.parser"))
-    except: return None
-
-def extract_sector(soup):
-    text = soup.get_text()
-    patterns = [r'Sector[:\s]*([A-Z][A-Za-z\s\-&/]{2,50})[;\.\s]', r'Industry[:\s]*([A-Z][A-Za-z\s\-&/]{2,50})[;\.\s]']
-    for pattern in patterns:
-        match = re.search(pattern, text, re.I)
-        if match: return match.group(1).strip()
+        print(f"🌐 Visiting: {url}")
+        driver.get(url)
+        WebDriverWait(driver, 15).until(lambda d: d.execute_script("return document.readyState") == "complete")
+        time.sleep(3)  # Let dynamic content load
+        
+        # 🎯 YOUR EXACT SELECTOR - Selenium version
+        try:
+            element = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, EXACT_SECTOR_SELECTOR))
+            )
+            sector = element.text.strip()
+            if sector and len(sector) > 2:
+                print(f"✅ SELENIUM EXACT: '{sector}'")
+                return sector
+        except:
+            print(f"❌ Exact selector failed for {symbol}")
+        
+        # Fallback: Short selector
+        try:
+            element = driver.find_element(By.CSS_SELECTOR, SHORT_SECTOR_SELECTOR)
+            sector = element.text.strip()
+            if sector and len(sector) > 2:
+                print(f"✅ SHORT SELECTOR: '{sector}'")
+                return sector
+        except: pass
+        
+        # Fallback: BeautifulSoup
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        sector = extract_sector_exact(soup)
+        if sector:
+            print(f"✅ BS EXACT: '{sector}'")
+            return sector
+            
+    except Exception as e:
+        print(f"❌ Selenium error {symbol}: {e}")
+    
     return None
 
 def get_sector(symbol, driver):
+    """Main sector getter - NSE → ET Money exact selector"""
+    print(f"🔍 {symbol}")
+    
+    # 1. Fast NSE API first
     sector = get_nse_sector_api(symbol)
-    if sector: return sector
-    sector = scrape_sector_direct(driver, symbol)
+    if sector:
+        print(f"✅ NSE API: '{sector}'")
+        return sector
+    
+    # 2. ET Money with YOUR exact selector
+    sector = scrape_sector_selenium(driver, symbol)
     return sector or "NO_DATA"
 
 def write_to_sheet6_ordered(client, results, chunk_start, local_index):
-    """🎯 WRITE TO EXACT ROW POSITIONS - Perfect Order!"""
+    """🎯 WRITE TO EXACT ROW POSITIONS"""
     try:
         sheet = client.open_by_url(NEW_MV2_URL).worksheet("Sheet6")
-        
-        # Calculate EXACT sheet rows (CHUNK_START + local position + 2 for header)
-        start_row = chunk_start + local_index + 2  # Row 2 = first data row
+        start_row = chunk_start + local_index + 2  # +2 for header
         end_row = start_row + len(results) - 1
-        
-        # UPDATE specific range A:start_row:C:end_row
         range_name = f"A{start_row}:C{end_row}"
         sheet.update(range_name, results)
-        
         print(f"✅ Rows {start_row}-{end_row} WRITTEN ({len(results)} rows)")
         return True
     except Exception as e:
@@ -94,47 +142,42 @@ def write_to_sheet6_ordered(client, results, chunk_start, local_index):
 
 def main():
     driver = client = None
-    print(f"🚀 ET Money Scraper - Chunk {CHUNK_START}-{CHUNK_END} (ORDERED)")
+    print(f"🚀 ET Money EXACT Selector Scraper - Chunk {CHUNK_START}-{CHUNK_END}")
     
     try:
-        # Auth
+        # Google Sheets auth
         creds_json = os.getenv("GSPREAD_CREDENTIALS")
         client = gspread.service_account_from_dict(json.loads(creds_json)) if creds_json else gspread.service_account(filename="credentials.json")
         
-        # Read FULL symbol list
+        # Read symbols
         source_sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
         all_data = source_sheet.get_all_values()
         all_symbols = [row[0].strip().upper() for row in all_data[1:] if row and row[0].strip()]
-        
-        # OUR chunk (0-indexed)
         symbols = all_symbols[CHUNK_START:CHUNK_END]
-        print(f"📖 {len(symbols)} symbols: {symbols[0]} → {symbols[-1]}")
+        print(f"📖 Processing {len(symbols)} symbols: {symbols[0]} → {symbols[-1]}")
         
         # CSV backup
-        chunk_file = f"chunk_{CHUNK_START}_{CHUNK_END}_sectors_{date.today().strftime('%d%m%Y')}.csv"
+        chunk_file = f"chunk_{CHUNK_START}_{CHUNK_END}_sectors_exact_{date.today().strftime('%d%m%Y')}.csv"
         with open(chunk_file, 'w', newline='') as f: 
             csv.writer(f).writerow(['SYMBOL', 'SECTOR', 'DATE'])
         
         driver = get_driver()
         results = []
-        local_index = 0  # Tracks position WITHIN chunk
+        local_index = 0
         
         for i, symbol in enumerate(symbols, 1):
-            print(f"[{i:3d}/{len(symbols)}] {symbol}")
+            print(f"\n[{i:3d}/{len(symbols)}] {symbol}")
             sector = get_sector(symbol, driver)
             results.append([symbol, sector, date.today().strftime("%d/%m/%Y")])
             
-            # Batch write to EXACT positions
+            # Batch write every BATCH_SIZE
             if len(results) >= BATCH_SIZE:
                 write_to_sheet6_ordered(client, results, CHUNK_START, local_index)
-                
-                # CSV backup
                 with open(chunk_file, 'a', newline='') as f: 
                     csv.writer(f).writerows(results)
-                
                 local_index += len(results)
                 results = []
-                time.sleep(random.uniform(2, 4))
+                time.sleep(random.uniform(2, 4))  # Anti-ban
         
         # Final batch
         if results:
@@ -142,11 +185,15 @@ def main():
             with open(chunk_file, 'a', newline='') as f: 
                 csv.writer(f).writerows(results)
         
-        print(f"🎉 PERFECT ORDER: {len(symbols)} symbols → Sheet6 Rows {CHUNK_START+2}-{CHUNK_END+1}")
+        print(f"\n🎉 COMPLETE! {len(symbols)} symbols → Sheet6 Rows {CHUNK_START+2}-{CHUNK_END+1}")
+        print(f"💾 Backup: {chunk_file}")
         
     except Exception as e: 
-        print(f"💥 ERROR: {e}")
+        print(f"💥 FATAL ERROR: {e}")
     finally: 
-        if driver: driver.quit()
+        if driver: 
+            driver.quit()
+        print("👋 Driver closed")
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()
