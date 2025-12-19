@@ -26,4 +26,4 @@ jobs:
     - name: Run Scraper
       env:
         GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-      run: python etmoney_search_scraper.py
+      run: python etmoney_scraper.py
