@@ -1,0 +1,41 @@
+name: ET Money Sector Chunk 1000-1499
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+
+env:
+  CHUNK_START: 1000
+  CHUNK_END: 1499
+  BATCH_SIZE: 50
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y google-chrome-stable xvfb wget unzip
+    - run: |
+        pip install gspread selenium beautifulsoup4 webdriver-manager oauth2client
+    - run: |
+        echo '${{ secrets.GSPREAD_CREDENTIALS }}' > credentials.json
+        python -c "import json; json.load(open('credentials.json'))" && echo "✅ Creds OK"
+    - run: python etmoney_scraper.py
+      env:
+        CHUNK_START: ${{ env.CHUNK_START }}
+        CHUNK_END: ${{ env.CHUNK_END }}
+    - if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sectors-1000-1499-${{ github.run_id }}
+        path: |
+          chunk_1000_1499*.csv
+          *.log
+        retention-days: 30
