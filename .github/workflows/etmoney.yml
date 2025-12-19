@@ -2,54 +2,48 @@ name: etmoney-sector-scraper
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 6 * * 1'
 
 jobs:
   scrape-etmoney:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
     
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v5
+    - uses: actions/setup-python@v5
       with:
         python-version: '3.11'
     
-    - name: Install Chrome & Chromedriver
+    - name: Install Chrome
       run: |
-        sudo apt-get update
-        sudo apt-get install -y wget unzip xvfb google-chrome-stable
+        sudo apt-get update -qq
+        sudo apt-get install -y google-chrome-stable xvfb wget unzip
     
-    - name: Install Python dependencies
+    - name: Install Python deps
       run: |
-        pip install gspread selenium beautifulsoup4 webdriver-manager oauth2client pandas
+        pip install gspread selenium beautifulsoup4 webdriver-manager oauth2client
     
-    - name: Decode & Create credentials.json (FIXED)
-      env:
-        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+    # ✅ FIXED: Use multiline heredoc - NO base64 issues
+    - name: Create credentials.json
       run: |
-        echo "Creating credentials.json..."
-        echo "$GSPREAD_CREDENTIALS" | tr -d '\r\n' | base64 -d > credentials.json
-        ls -la credentials.json
-        head -n 5 credentials.json  # Verify content
+        cat > credentials.json << 'EOF'
+        ${{ secrets.GSPREAD_CREDENTIALS }}
+        EOF
         
-        # Validate JSON
-        python -m json.tool credentials.json > /dev/null && echo "✅ JSON valid" || echo "❌ JSON invalid"
+        # Verify
+        echo "📄 Credentials created:"
+        head -n 3 credentials.json
+        python3 -m json.tool credentials.json > /dev/null && echo "✅ JSON valid" || echo "❌ JSON invalid"
     
-    - name: Run ET Money Sector Scraper
-      run: |
-        python etmoney_scraper.py
+    - name: Run ET Money Scraper
+      run: python etmoney_scraper.py
     
     - name: Upload results
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: sector-results-${{ github.run_id }}
+        name: results-${{ github.run_id }}
         path: |
+          credentials.json
           *.csv
           *.log
-          credentials.json
-        retention-days: 7
