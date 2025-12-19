@@ -13,8 +13,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 STOCK_LIST_URL = "https://docs.google.com/spreadsheets/d/1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4/edit?gid=0#gid=0"
 NEW_MV2_URL    = "https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc/edit?gid=0#gid=0"
 
-SHARD_INDEX = int(os.getenv("SHARD_INDEX", "0"))
-SHARD_STEP  = int(os.getenv("SHARD_STEP", "1"))
+# SIMPLE RANGE-BASED (NO SHARDING CONFUSION!)
 START_INDEX = int(os.getenv("START_INDEX", "0"))
 END_INDEX   = int(os.getenv("END_INDEX", "2500"))
 CHECKPOINT_FILE = os.getenv("CHECKPOINT_FILE", "checkpoint.txt")
@@ -28,20 +27,26 @@ if os.path.exists(CHECKPOINT_FILE):
     except:
         pass
 
-print(f"🔧 SHARD: {SHARD_INDEX}/{SHARD_STEP} | Range: {START_INDEX}-{END_INDEX} | Resume: {last_i}")
+print(f"🔧 Range: {START_INDEX}-{END_INDEX} | Resume from: {last_i}")
 
 # ---------------- GOOGLE SHEETS AUTH ---------------- #
 try:
     creds_json = os.getenv("GSPREAD_CREDENTIALS")
     if creds_json:
         client = gspread.service_account_from_dict(json.loads(creds_json))
+        print("✅ Auth: GSPREAD_CREDENTIALS")
     else:
         client = gspread.service_account(filename="credentials.json")
+        print("✅ Auth: credentials.json")
         
     source_sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
     dest_sheet   = client.open_by_url(NEW_MV2_URL).worksheet("Sheet5")
     data_rows = source_sheet.get_all_values()[1:]  # Skip header
-    print("✅ Connected. Reading Sheet1, Writing Sheet5")
+    
+    total_symbols = len(data_rows)
+    chunk_symbols = END_INDEX - START_INDEX + 1
+    print(f"✅ Connected. {total_symbols} total rows | Processing {chunk_symbols} symbols")
+    
 except Exception as e:
     print(f"❌ Connection Error: {e}")
     raise
@@ -49,9 +54,10 @@ except Exception as e:
 current_date = date.today().strftime("%m/%d/%Y")
 CHROME_SERVICE = Service(ChromeDriverManager().install())
 
-# ---------------- SCRAPER ---------------- #
+# ---------------- TRADINGVIEW SCRAPER ---------------- #
 def scrape_tradingview(url):
-    if not url: return []
+    if not url:
+        return []
     
     opts = Options()
     opts.add_argument("--headless=new")
@@ -66,70 +72,100 @@ def scrape_tradingview(url):
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     
     try:
+        # Load TradingView cookies if available
         if os.path.exists("cookies.json"):
             driver.get("https://www.tradingview.com/")
             with open("cookies.json", "r") as f:
-                for c in json.load(f):
+                cookies = json.load(f)
+                for c in cookies:
                     try:
                         driver.add_cookie({
-                            "name": c.get("name"), "value": c.get("value"),
-                            "domain": c.get("domain", ".tradingview.com"), "path": c.get("path", "/")
+                            "name": c.get("name"),
+                            "value": c.get("value"),
+                            "domain": c.get("domain", ".tradingview.com"),
+                            "path": c.get("path", "/")
                         })
-                    except: pass
+                    except:
+                        pass
             driver.refresh()
+            time.sleep(2)
         
         driver.get(url)
-        WebDriverWait(driver, 40).until(EC.visibility_of_element_located((
-            By.XPATH, '/html/body/div[2]/div/div[5]/div/div[1]/div/div[2]/div[1]/div[2]/div/div[1]/div[2]/div[2]/div[2]/div[2]/div'
-        )))
-        time.sleep(2)
+        WebDriverWait(driver, 40).until(
+            EC.visibility_of_element_located((
+                By.XPATH,
+                '/html/body/div[2]/div/div[5]/div/div[1]/div/div[2]/div[1]/div[2]/div/div[1]/div[2]/div[2]/div[2]/div[2]/div'
+            ))
+        )
+        time.sleep(3)  # Stable wait
         
         soup = BeautifulSoup(driver.page_source, "html.parser")
-        return [
+        values = [
             el.get_text().replace('−', '-').replace('∅', '').strip()
             for el in soup.find_all("div", class_="valueValue-l31H9iuA apply-common-tooltip")
         ]
+        return values[:6]  # Limit to 6 values
+        
     except Exception as e:
-        print(f"⚠️ Scrape Fail: {e}")
+        print(f"⚠️ Scrape failed: {e}")
         return []
     finally:
         driver.quit()
 
-# ---------------- MAIN LOOP (YOUR PERFECT LOGIC) ---------------- #
-batch, batch_start = [], None
+# ---------------- MAIN LOOP (PERFECT ORDER) ---------------- #
+batch = []
+batch_start = None
+processed = 0
+
+print(f"\n🚀 Starting scrape: Rows {START_INDEX+2}-{END_INDEX+2}")
 
 for i, row in enumerate(data_rows):
-    if i < last_i or i < START_INDEX or i > END_INDEX or i % SHARD_STEP != SHARD_INDEX:
+    # SIMPLE RANGE FILTER (NO SHARDING!)
+    if i < last_i or i < START_INDEX or i > END_INDEX:
         continue
     
-    name = row[0]
-    url  = row[3] if len(row) > 3 else ""
-    target_row = i + 2  # i=0 → Row 2
+    name = row[0].strip()
+    url = row[3] if len(row) > 3 else ""
+    target_row = i + 2  # i=0 → Sheet row 2 (perfect!)
     
     if batch_start is None:
         batch_start = target_row
     
-    print(f"🔎 [{i}] {name} -> Row {target_row}")
+    print(f"🔎 [{i+1:4d}] {name[:20]:20s} -> Row {target_row}")
     
+    # Scrape TradingView
     vals = scrape_tradingview(url)
     row_data = [name, current_date] + (vals if vals else ["Error"] * 6)
     batch.append(row_data)
+    processed += 1
     
+    # Batch write every 5 rows
     if len(batch) >= 5:
         try:
             dest_sheet.update(f"A{batch_start}", batch)
-            print(f"💾 Saved rows {batch_start} to {target_row}")
-            batch, batch_start = [], None
-            time.sleep(2)
+            print(f"💾 Batch saved: Rows {batch_start}-{target_row} ({len(batch)} rows)")
+            batch = []
+            batch_start = None
+            time.sleep(2)  # Rate limit
         except Exception as e:
             print(f"❌ Write Error: {e}")
     
+    # Checkpoint after every symbol
     with open(CHECKPOINT_FILE, "w") as f:
         f.write(str(i + 1))
     
-    time.sleep(1)
+    time.sleep(1.5)  # Anti-ban delay
 
-if batch:
-    dest_sheet.update(f"A{batch_start}", batch)
+# Final batch flush
+if batch and batch_start:
+    try:
+        dest_sheet.update(f"A{batch_start}", batch)
+        print(f"💾 Final batch: Rows {batch_start}-{target_row}")
+    except Exception as e:
+        print(f"❌ Final write error: {e}")
 
-print("\n🏁 Process finished.")
+print(f"\n🎉 COMPLETE!")
+print(f"📊 Processed: {processed} symbols")
+print(f"📍 Rows {START_INDEX+2}-{END_INDEX+2} in Sheet5")
+print(f"💾 Checkpoint: {CHECKPOINT_FILE}")
+print("🏁 Process finished.")
