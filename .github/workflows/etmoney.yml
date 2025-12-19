@@ -1,29 +1,54 @@
-name: ET Money Sector Search Scraper
+name: etmoney-sector-scraper
 
 on:
+  workflow_dispatch:  # Manual trigger
   schedule:
-    - cron: '0 2 * * *' # Runs daily at 2 AM
-  workflow_dispatch: # Allows manual trigger
+    - cron: '0 6 * * 1'  # Every Monday 6AM IST
 
 jobs:
-  scrape:
+  scrape-etmoney:
     runs-on: ubuntu-latest
-
+    
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v3
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
-
-    - name: Install Chrome and Dependencies
+        python-version: '3.11'
+    
+    - name: Install Chrome & Chromedriver
       run: |
-        python -m pip install --upgrade pip
-        pip install selenium beautifulsoup4 gspread webdriver-manager
-
-    - name: Run Scraper
+        sudo apt-get update
+        sudo apt-get install -y wget unzip xvfb
+        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+        sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list'
+        sudo apt-get update
+        sudo apt-get install -y google-chrome-stable
+        sudo chown -R runner:runner /opt/google/chrome
+    
+    - name: Install Python dependencies
+      run: |
+        pip install gspread selenium beautifulsoup4 webdriver-manager oauth2client pandas
+    
+    - name: Create credentials file
       env:
         GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-      run: python etmoney_scraper.py
+      run: |
+        echo "$GSPREAD_CREDENTIALS" | base64 -d > credentials.json
+    
+    - name: Run ET Money Sector Scraper
+      env:
+        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+      run: |
+        python etmoney_sector_scraper.py
+    
+    - name: Upload results as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sector-scraping-results
+        path: |
+          *.csv
+          *.log
+        retention-days: 7
