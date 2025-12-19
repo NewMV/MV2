@@ -8,6 +8,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 from webdriver_manager.chrome import ChromeDriverManager
+import requests
 
 STOCK_LIST_URL = "https://docs.google.com/spreadsheets/d/1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4/edit?gid=0#gid=0"
 NEW_MV2_URL    = "https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc/edit?gid=0#gid=0"
@@ -16,15 +17,18 @@ CHUNK_START = int(os.getenv('CHUNK_START', 0))
 CHUNK_END   = int(os.getenv('CHUNK_END', 2500))
 BATCH_SIZE  = 20
 
+# Slugs where you know the exact ET Money path/id
 SYMBOL_ETMONEY_MAP = {
+    '20MICRONS': '20-microns-ltd/2758',      # Mining/Minerals pill [web:65][web:79]
     '360ONE': '360-one-wam-ltd/1035',
     '3IINFOLTD': '3i-infotech-ltd/348',
     '3MINDIA': '3m-india-ltd/1004',
     '5PAISA': '5paisa-capital-ltd/1005',
     '63MOONS': '63-moons-technologies-ltd/2781',
     'A2ZINFRA': 'a2z-infra-engineering-ltd/1007',
-    '20MICRONS': '20-microns-ltd/2758',   # explicitly map your example [web:65]
 }
+
+# ---------- Browser + API helpers ----------
 
 def get_driver():
     opts = Options()
@@ -49,40 +53,93 @@ def build_etmoney_url(symbol: str) -> str:
         return base + slug
     return base + f"{symbol.lower()}-ltd"
 
-def extract_sector_badge(soup: BeautifulSoup) -> str:
+def get_nse_sector_api(symbol):
+    try:
+        url = f"https://www.nseindia.com/api/quote-equity?symbol={symbol}"
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json",
+            "Referer": "https://www.nseindia.com/"
+        }
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return data.get("info", {}).get("industry") or data.get("info", {}).get("sector")
+    except:
+        pass
+    return None
+
+# ---------- Sector pill extraction ----------
+
+def extract_sector_badge_from_soup(soup: BeautifulSoup, symbol: str) -> str:
     """
-    Look only for header links whose href contains '/stocks/sector/'.
-    That link corresponds to the sector pill like Mining/Minerals etc. [web:79][web:96][web:101]
+    Only look inside the main header and pick <a> links whose href
+    contains '/stocks/sector/' → these are sector pills like Mining/Minerals,
+    IT - Software, Sugar, etc. [web:79][web:96][web:101]
     """
     header = soup.select_one("#page-container div.w-full.col-span-8")
     if not header:
+        print(f"  ⚠ header not found for {symbol}")
         return "NO_DATA"
 
-    # any <a> in header that links to a sector page
+    links = header.select("a")
+    print(f"  ℹ {len(links)} header links for {symbol}")
+
     for a in header.select("a[href*='/stocks/sector/']"):
         text = a.get_text(strip=True)
         if text:
+            print(f"  ✅ sector pill: {text}")
             return text
 
+    print(f"  ⚠ no sector pill link for {symbol}")
     return "NO_DATA"
 
 def get_sector(symbol: str, driver) -> str:
+    """
+    1) Wait until sector pill is visible and read it.
+    2) If pill never appears, fall back to NSE API.
+    """
     try:
         url = build_etmoney_url(symbol)
         print(f"🌐 {symbol} → {url}")
         driver.get(url)
-        WebDriverWait(driver, 15).until(
+
+        # Wait for page load
+        WebDriverWait(driver, 20).until(
             lambda d: d.execute_script("return document.readyState") == "complete"
         )
-        time.sleep(2)
 
+        wait = WebDriverWait(driver, 10)
+
+        # Explicit wait: at least one <a> with /stocks/sector/ in href inside header
+        try:
+            locator = (By.CSS_SELECTOR, "#page-container div.w-full.col-span-8 a[href*='/stocks/sector/']")
+            elem = wait.until(EC.visibility_of_element_located(locator))
+            text = elem.text.strip()
+            if text:
+                print(f"  ✅ waited pill: {text}")
+                return text
+        except Exception:
+            print(f"  ⚠ sector pill not visible yet for {symbol}, using BeautifulSoup fallback")
+
+        # Fallback: BeautifulSoup scan of header
         soup = BeautifulSoup(driver.page_source, "html.parser")
-        sector = extract_sector_badge(soup)
-        print(f"  → {sector}")
-        return sector
+        sector = extract_sector_badge_from_soup(soup, symbol)
+        if sector != "NO_DATA":
+            return sector
+
     except Exception as e:
-        print(f"❌ {symbol} error: {e}")
-        return "NO_DATA"
+        print(f"  ❌ Selenium/NAV error for {symbol}: {e}")
+
+    # FINAL fallback: NSE API (never returns NO_DATA if NSE knows it) [web:6]
+    api_sector = get_nse_sector_api(symbol)
+    if api_sector:
+        print(f"  🔁 NSE fallback: {api_sector}")
+        return api_sector
+
+    return "NO_DATA"
+
+# ---------- Sheets + main loop ----------
 
 def write_to_sheet6_ordered(client, results, chunk_start, local_index):
     try:
@@ -99,6 +156,7 @@ def write_to_sheet6_ordered(client, results, chunk_start, local_index):
 def main():
     driver = client = None
     print(f"🚀 ET Money sector-pill scraper {CHUNK_START}-{CHUNK_END}")
+
     try:
         creds_json = os.getenv("GSPREAD_CREDENTIALS")
         client = (
@@ -115,9 +173,9 @@ def main():
             print("no symbols in this chunk")
             return
 
-        backup = f"chunk_{CHUNK_START}_{CHUNK_END}_pill_{date.today().strftime('%d%m%Y')}.csv"
+        backup = f"chunk_{CHUNK_START}_{CHUNK_END}_sectorpill_{date.today().strftime('%d%m%Y')}.csv"
         with open(backup, "w", newline="") as f:
-            csv.writer(f).writerow(["SYMBOL", "SECTOR_PILL", "DATE"])
+            csv.writer(f).writerow(["SYMBOL", "SECTOR", "DATE"])
 
         driver = get_driver()
         results = []
@@ -142,9 +200,11 @@ def main():
                 csv.writer(f).writerows(results)
 
         print("✅ done")
+
     finally:
         if driver:
             driver.quit()
+        print("👋 driver closed")
 
 if __name__ == "__main__":
     main()
