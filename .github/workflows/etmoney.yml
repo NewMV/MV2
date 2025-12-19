@@ -1,9 +1,9 @@
 name: etmoney-sector-scraper
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
   schedule:
-    - cron: '0 6 * * 1'  # Every Monday 6AM IST
+    - cron: '0 6 * * 1'
 
 jobs:
   scrape-etmoney:
@@ -21,34 +21,35 @@ jobs:
     - name: Install Chrome & Chromedriver
       run: |
         sudo apt-get update
-        sudo apt-get install -y wget unzip xvfb
-        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-        sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list'
-        sudo apt-get update
-        sudo apt-get install -y google-chrome-stable
-        sudo chown -R runner:runner /opt/google/chrome
+        sudo apt-get install -y wget unzip xvfb google-chrome-stable
     
     - name: Install Python dependencies
       run: |
         pip install gspread selenium beautifulsoup4 webdriver-manager oauth2client pandas
     
-    - name: Create credentials file
+    - name: Decode & Create credentials.json (FIXED)
       env:
         GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
       run: |
-        echo "$GSPREAD_CREDENTIALS" | base64 -d > credentials.json
+        echo "Creating credentials.json..."
+        echo "$GSPREAD_CREDENTIALS" | tr -d '\r\n' | base64 -d > credentials.json
+        ls -la credentials.json
+        head -n 5 credentials.json  # Verify content
+        
+        # Validate JSON
+        python -m json.tool credentials.json > /dev/null && echo "✅ JSON valid" || echo "❌ JSON invalid"
     
     - name: Run ET Money Sector Scraper
-      env:
-        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
       run: |
-        python etmoney_sector_scraper.py
+        python etmoney_scraper.py
     
-    - name: Upload results as artifact
+    - name: Upload results
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: sector-scraping-results
+        name: sector-results-${{ github.run_id }}
         path: |
           *.csv
           *.log
+          credentials.json
         retention-days: 7
