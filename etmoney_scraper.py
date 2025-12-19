@@ -4,218 +4,149 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 from webdriver_manager.chrome import ChromeDriverManager
+import re
 import requests
 
 STOCK_LIST_URL = "https://docs.google.com/spreadsheets/d/1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4/edit?gid=0#gid=0"
 NEW_MV2_URL    = "https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc/edit?gid=0#gid=0"
 
 CHUNK_START = int(os.getenv('CHUNK_START', 0))
-CHUNK_END   = int(os.getenv('CHUNK_END', 2500))
-BATCH_SIZE  = 20
+CHUNK_END = int(os.getenv('CHUNK_END', 2500))
+BATCH_SIZE = 20
 
-# Known ET Money slugs (you can extend this gradually)
 SYMBOL_ETMONEY_MAP = {
-    '20MICRONS': '20-microns-ltd/2758',
-    '360ONE': '360-one-wam-ltd/1035',
-    '3IINFOLTD': '3i-infotech-ltd/348',
-    '3MINDIA': '3m-india-ltd/1004',
-    '5PAISA': '5paisa-capital-ltd/1005',
-    '63MOONS': '63-moons-technologies-ltd/2781',
-    'A2ZINFRA': 'a2z-infra-engineering-ltd/1007',
+    '360ONE': '360-one-wam-ltd/1035', '3IINFOLTD': '3i-infotech-ltd/1003', 
+    '3MINDIA': '3m-india-ltd/1004', '5PAISA': '5paisa-capital-ltd/1005',
+    '63MOONS': '63-moons-technologies-ltd/1006', 'A2ZINFRA': 'a2z-infra-engineering-ltd/1007',
 }
-
-# ---------- Selenium + API helpers ----------
 
 def get_driver():
     opts = Options()
-    opts.add_argument("--headless=new")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--window-size=1920,1080")
-    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_argument("--headless=new"); opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage"); opts.add_argument("--disable-gpu")
+    opts.add_argument("--window-size=1920,1080"); opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-    opts.add_experimental_option("useAutomationExtension", False)
-    opts.add_argument(
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
+    opts.add_experimental_option('useAutomationExtension', False)
+    opts.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
-
-def build_etmoney_url(symbol: str) -> str:
-    base = "https://www.etmoney.com/stocks/"
-    slug = SYMBOL_ETMONEY_MAP.get(symbol)
-    if slug:
-        return base + slug
-    # generic pattern; works for many but not all tickers
-    return base + f"{symbol.lower()}-ltd"
 
 def get_nse_sector_api(symbol):
     try:
         url = f"https://www.nseindia.com/api/quote-equity?symbol={symbol}"
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json",
-            "Referer": "https://www.nseindia.com/"
-        }
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            return data.get("info", {}).get("industry") or data.get("info", {}).get("sector")
-    except:
-        pass
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': 'application/json', 'Referer': 'https://www.nseindia.com/'}
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get('info', {}).get('industry') or data.get('info', {}).get('sector')
+    except: pass
     return None
 
-# ---------- Sector pill extraction ----------
-
-def extract_sector_badge_from_soup(soup: BeautifulSoup, symbol: str) -> str:
-    """
-    Look inside the header block and pick <a> whose href matches
-    /stocks/sector/<slug>/<numeric-id>. The text is the pill value. [web:79][web:96][web:101]
-    """
-    header = soup.select_one("#page-container div.w-full.col-span-8")
-    if not header:
-        print(f"  ⚠ header not found for {symbol}")
-        return "NO_DATA"
-
-    for a in header.select("a[href^='/stocks/sector/']"):
-        href = a.get("href") or ""
-        text = a.get_text(strip=True)
-        last = href.rstrip("/").split("/")[-1]
-        if text and last.isdigit():
-            print(f"  ✅ BS sector pill: {text} ({href})")
-            return text
-
-    print(f"  ⚠ no sector pill link in header for {symbol}")
-    return "NO_DATA"
-
-def get_sector(symbol: str, driver) -> str:
-    """
-    1) Wait for sector-pill links.
-    2) Choose one with numeric id in href.
-    3) Fallback to NSE if no pill. [web:6]
-    """
+def scrape_sector_direct(driver, symbol):
     try:
-        url = build_etmoney_url(symbol)
-        print(f"🌐 {symbol} → {url}")
-        driver.get(url)
+        slug = SYMBOL_ETMONEY_MAP.get(symbol)
+        if slug:
+            driver.get(f"https://www.etmoney.com/stocks/{slug}")
+            WebDriverWait(driver, 10).until(lambda d: d.execute_script("return document.readyState") == "complete")
+            time.sleep(2); soup = BeautifulSoup(driver.page_source, "html.parser")
+            sector = extract_sector(soup)
+            if sector and sector != "NO_DATA": return sector
+        
+        driver.get(f"https://www.etmoney.com/stocks/{symbol.lower()}-ltd")
+        WebDriverWait(driver, 10).until(lambda d: d.execute_script("return document.readyState") == "complete")
+        time.sleep(2)
+        return extract_sector(BeautifulSoup(driver.page_source, "html.parser"))
+    except: return None
 
-        WebDriverWait(driver, 20).until(
-            lambda d: d.execute_script("return document.readyState") == "complete"
-        )
+def extract_sector(soup):
+    text = soup.get_text()
+    patterns = [r'Sector[:\s]*([A-Z][A-Za-z\s\-&/]{2,50})[;\.\s]', r'Industry[:\s]*([A-Z][A-Za-z\s\-&/]{2,50})[;\.\s]']
+    for pattern in patterns:
+        match = re.search(pattern, text, re.I)
+        if match: return match.group(1).strip()
+    return None
 
-        locator = (
-            By.CSS_SELECTOR,
-            "#page-container div.w-full.col-span-8 a[href^='/stocks/sector/']"
-        )
-        try:
-            elems = WebDriverWait(driver, 8).until(
-                EC.presence_of_all_elements_located(locator)
-            )
-            chosen = None
-            for el in elems:
-                href = el.get_attribute("href") or ""
-                text = el.text.strip()
-                # href is absolute; keep only path
-                path = "/" + "/".join(href.split("/", 3)[3:]) if "://" in href else href
-                last = path.rstrip("/").split("/")[-1]
-                if text and last.isdigit():
-                    chosen = text
-                    print(f"  ✅ Selenium sector pill: {text} ({path})")
-                    break
-
-            if chosen:
-                return chosen
-            else:
-                print("  ⚠ Selenium found sector links but none with numeric id, using BS")
-        except Exception:
-            print("  ⚠ no sector link via Selenium, using BS")
-
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        sector = extract_sector_badge_from_soup(soup, symbol)
-        if sector != "NO_DATA":
-            return sector
-
-    except Exception as e:
-        print(f"  ❌ Selenium/navigation error for {symbol}: {e}")
-
-    api_sector = get_nse_sector_api(symbol)
-    if api_sector:
-        print(f"  🔁 NSE fallback: {api_sector}")
-        return api_sector
-
-    return "NO_DATA"
-
-# ---------- Sheets + main loop ----------
+def get_sector(symbol, driver):
+    sector = get_nse_sector_api(symbol)
+    if sector: return sector
+    sector = scrape_sector_direct(driver, symbol)
+    return sector or "NO_DATA"
 
 def write_to_sheet6_ordered(client, results, chunk_start, local_index):
+    """🎯 WRITE TO EXACT ROW POSITIONS - Perfect Order!"""
     try:
         sheet = client.open_by_url(NEW_MV2_URL).worksheet("Sheet6")
-        start_row = chunk_start + local_index + 2
-        end_row   = start_row + len(results) - 1
-        sheet.update(f"A{start_row}:C{end_row}", results)
-        print(f"✅ rows {start_row}-{end_row}")
+        
+        # Calculate EXACT sheet rows (CHUNK_START + local position + 2 for header)
+        start_row = chunk_start + local_index + 2  # Row 2 = first data row
+        end_row = start_row + len(results) - 1
+        
+        # UPDATE specific range A:start_row:C:end_row
+        range_name = f"A{start_row}:C{end_row}"
+        sheet.update(range_name, results)
+        
+        print(f"✅ Rows {start_row}-{end_row} WRITTEN ({len(results)} rows)")
         return True
     except Exception as e:
-        print(f"❌ sheet write: {e}")
+        print(f"❌ Write failed: {e}")
         return False
 
 def main():
     driver = client = None
-    print(f"🚀 ET Money sector-pill scraper {CHUNK_START}-{CHUNK_END}")
-
+    print(f"🚀 ET Money Scraper - Chunk {CHUNK_START}-{CHUNK_END} (ORDERED)")
+    
     try:
+        # Auth
         creds_json = os.getenv("GSPREAD_CREDENTIALS")
-        client = (
-            gspread.service_account_from_dict(json.loads(creds_json))
-            if creds_json else
-            gspread.service_account(filename="credentials.json")
-        )
-
-        sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
-        data = sheet.get_all_values()
-        all_symbols = [r[0].strip().upper() for r in data[1:] if r and r[0].strip()]
+        client = gspread.service_account_from_dict(json.loads(creds_json)) if creds_json else gspread.service_account(filename="credentials.json")
+        
+        # Read FULL symbol list
+        source_sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
+        all_data = source_sheet.get_all_values()
+        all_symbols = [row[0].strip().upper() for row in all_data[1:] if row and row[0].strip()]
+        
+        # OUR chunk (0-indexed)
         symbols = all_symbols[CHUNK_START:CHUNK_END]
-        if not symbols:
-            print("no symbols in this chunk")
-            return
-
-        backup = f"chunk_{CHUNK_START}_{CHUNK_END}_sectorpill_{date.today().strftime('%d%m%Y')}.csv"
-        with open(backup, "w", newline="") as f:
-            csv.writer(f).writerow(["SYMBOL", "SECTOR", "DATE"])
-
+        print(f"📖 {len(symbols)} symbols: {symbols[0]} → {symbols[-1]}")
+        
+        # CSV backup
+        chunk_file = f"chunk_{CHUNK_START}_{CHUNK_END}_sectors_{date.today().strftime('%d%m%Y')}.csv"
+        with open(chunk_file, 'w', newline='') as f: 
+            csv.writer(f).writerow(['SYMBOL', 'SECTOR', 'DATE'])
+        
         driver = get_driver()
         results = []
-        local_index = 0
-
+        local_index = 0  # Tracks position WITHIN chunk
+        
         for i, symbol in enumerate(symbols, 1):
-            print(f"\n[{i}/{len(symbols)}] {symbol}")
+            print(f"[{i:3d}/{len(symbols)}] {symbol}")
             sector = get_sector(symbol, driver)
             results.append([symbol, sector, date.today().strftime("%d/%m/%Y")])
-
+            
+            # Batch write to EXACT positions
             if len(results) >= BATCH_SIZE:
                 write_to_sheet6_ordered(client, results, CHUNK_START, local_index)
-                with open(backup, "a", newline="") as f:
+                
+                # CSV backup
+                with open(chunk_file, 'a', newline='') as f: 
                     csv.writer(f).writerows(results)
+                
                 local_index += len(results)
                 results = []
                 time.sleep(random.uniform(2, 4))
-
+        
+        # Final batch
         if results:
             write_to_sheet6_ordered(client, results, CHUNK_START, local_index)
-            with open(backup, "a", newline="") as f:
+            with open(chunk_file, 'a', newline='') as f: 
                 csv.writer(f).writerows(results)
+        
+        print(f"🎉 PERFECT ORDER: {len(symbols)} symbols → Sheet6 Rows {CHUNK_START+2}-{CHUNK_END+1}")
+        
+    except Exception as e: 
+        print(f"💥 ERROR: {e}")
+    finally: 
+        if driver: driver.quit()
 
-        print("✅ done")
-
-    finally:
-        if driver:
-            driver.quit()
-        print("👋 driver closed")
-
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
