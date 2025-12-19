@@ -33,3 +33,14 @@ jobs:
         SHARD_STEP: 5
         CHECKPOINT_FILE: "checkpoint_chunk0.txt"
       run: python run_scraper.py
+    - name: 📊 Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: tradingview-0-499-${{ github.run_id }}
+        path: |
+          checkpoint_*.txt
+          credentials.json
+          cookies.json
+          *.log
+        retention-days: 30
