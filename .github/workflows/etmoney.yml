@@ -34,7 +34,7 @@ jobs:
         python -c "import json; json.load(open('credentials.json'))" && echo "✅ Valid JSON"
     
     - name: 🚀 Run Scraper (Batch Writing)
-      run: python etmoney_sector_scraper.py
+      run: python etmoney_scraper.py
     
     - name: 📊 Upload Results
       if: always()
