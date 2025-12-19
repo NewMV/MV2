@@ -1,49 +1,47 @@
-name: etmoney-sector-scraper
+name: ET Money Sector Scraper
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'  # Monday 6AM IST
 
 jobs:
-  scrape-etmoney:
+  scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     
     steps:
-    - uses: actions/checkout@v4
+    - name: 📥 Checkout
+      uses: actions/checkout@v4
     
-    - uses: actions/setup-python@v5
+    - name: 🐍 Python 3.11
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
     
-    - name: Install Chrome
+    - name: 🌐 Install Chrome
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y google-chrome-stable xvfb wget unzip
     
-    - name: Install Python deps
+    - name: 📦 Python deps
       run: |
         pip install gspread selenium beautifulsoup4 webdriver-manager oauth2client
     
-    # ✅ FIXED: Use multiline heredoc - NO base64 issues
-    - name: Create credentials.json
+    - name: 🔐 Setup Credentials
       run: |
-        cat > credentials.json << 'EOF'
-        ${{ secrets.GSPREAD_CREDENTIALS }}
-        EOF
-        
-        # Verify
-        echo "📄 Credentials created:"
-        head -n 3 credentials.json
-        python3 -m json.tool credentials.json > /dev/null && echo "✅ JSON valid" || echo "❌ JSON invalid"
+        echo '${{ secrets.GSPREAD_CREDENTIALS }}' > credentials.json
+        python -c "import json; json.load(open('credentials.json'))" && echo "✅ Valid JSON"
     
-    - name: Run ET Money Scraper
-      run: python etmoney_scraper.py
+    - name: 🚀 Run Scraper (Batch Writing)
+      run: python etmoney_sector_scraper.py
     
-    - name: Upload results
+    - name: 📊 Upload Results
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: results-${{ github.run_id }}
+        name: sectors-${{ github.run_id }}
         path: |
           credentials.json
-          *.csv
           *.log
+        retention-days: 30
