@@ -9,7 +9,6 @@ from webdriver_manager.chrome import ChromeDriverManager
 import re
 import requests
 
-# ---------------- CONFIG ---------------- #
 STOCK_LIST_URL = "https://docs.google.com/spreadsheets/d/1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4/edit?gid=0#gid=0"
 NEW_MV2_URL    = "https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc/edit?gid=0#gid=0"
 
@@ -74,44 +73,80 @@ def get_sector(symbol, driver):
     sector = scrape_sector_direct(driver, symbol)
     return sector or "NO_DATA"
 
-def write_to_sheet6(client, results):
+def write_to_sheet6_ordered(client, results, chunk_start, local_index):
+    """🎯 WRITE TO EXACT ROW POSITIONS - Perfect Order!"""
     try:
         sheet = client.open_by_url(NEW_MV2_URL).worksheet("Sheet6")
-        sheet.append_rows(results)
+        
+        # Calculate EXACT sheet rows (CHUNK_START + local position + 2 for header)
+        start_row = chunk_start + local_index + 2  # Row 2 = first data row
+        end_row = start_row + len(results) - 1
+        
+        # UPDATE specific range A:start_row:C:end_row
+        range_name = f"A{start_row}:C{end_row}"
+        sheet.update(range_name, results)
+        
+        print(f"✅ Rows {start_row}-{end_row} WRITTEN ({len(results)} rows)")
         return True
-    except: return False
+    except Exception as e:
+        print(f"❌ Write failed: {e}")
+        return False
 
 def main():
     driver = client = None
-    print(f"🚀 Chunk {CHUNK_START}-{CHUNK_END}")
+    print(f"🚀 ET Money Scraper - Chunk {CHUNK_START}-{CHUNK_END} (ORDERED)")
     
     try:
+        # Auth
         creds_json = os.getenv("GSPREAD_CREDENTIALS")
         client = gspread.service_account_from_dict(json.loads(creds_json)) if creds_json else gspread.service_account(filename="credentials.json")
         
-        symbols = [row[0].strip().upper() for row in client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1").get_all_values()[1:] if row and row[0].strip()][CHUNK_START:CHUNK_END]
+        # Read FULL symbol list
+        source_sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
+        all_data = source_sheet.get_all_values()
+        all_symbols = [row[0].strip().upper() for row in all_data[1:] if row and row[0].strip()]
+        
+        # OUR chunk (0-indexed)
+        symbols = all_symbols[CHUNK_START:CHUNK_END]
+        print(f"📖 {len(symbols)} symbols: {symbols[0]} → {symbols[-1]}")
+        
+        # CSV backup
         chunk_file = f"chunk_{CHUNK_START}_{CHUNK_END}_sectors_{date.today().strftime('%d%m%Y')}.csv"
+        with open(chunk_file, 'w', newline='') as f: 
+            csv.writer(f).writerow(['SYMBOL', 'SECTOR', 'DATE'])
         
-        with open(chunk_file, 'w', newline='') as f: csv.writer(f).writerow(['SYMBOL', 'SECTOR', 'DATE'])
         driver = get_driver()
-        
         results = []
+        local_index = 0  # Tracks position WITHIN chunk
+        
         for i, symbol in enumerate(symbols, 1):
-            print(f"[{i}/{len(symbols)}] {symbol}")
-            results.append([symbol, get_sector(symbol, driver), date.today().strftime("%d/%m/%Y")])
+            print(f"[{i:3d}/{len(symbols)}] {symbol}")
+            sector = get_sector(symbol, driver)
+            results.append([symbol, sector, date.today().strftime("%d/%m/%Y")])
             
+            # Batch write to EXACT positions
             if len(results) >= BATCH_SIZE:
-                write_to_sheet6(client, results)
-                with open(chunk_file, 'a', newline='') as f: csv.writer(f).writerows(results)
-                results = []; time.sleep(random.uniform(2, 4))
+                write_to_sheet6_ordered(client, results, CHUNK_START, local_index)
+                
+                # CSV backup
+                with open(chunk_file, 'a', newline='') as f: 
+                    csv.writer(f).writerows(results)
+                
+                local_index += len(results)
+                results = []
+                time.sleep(random.uniform(2, 4))
         
+        # Final batch
         if results:
-            write_to_sheet6(client, results)
-            with open(chunk_file, 'a', newline='') as f: csv.writer(f).writerows(results)
-            
-        print(f"🎉 {len(symbols)} symbols → Sheet6 + {chunk_file}")
+            write_to_sheet6_ordered(client, results, CHUNK_START, local_index)
+            with open(chunk_file, 'a', newline='') as f: 
+                csv.writer(f).writerows(results)
         
-    except Exception as e: print(f"💥 {e}")
-    finally: driver.quit() if driver else None
+        print(f"🎉 PERFECT ORDER: {len(symbols)} symbols → Sheet6 Rows {CHUNK_START+2}-{CHUNK_END+1}")
+        
+    except Exception as e: 
+        print(f"💥 ERROR: {e}")
+    finally: 
+        if driver: driver.quit()
 
 if __name__ == "__main__": main()
