@@ -1,0 +1,46 @@
+name: TradingView Chunk 4 (2000-2500)
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 7 * * 2'  # Tuesday 7AM IST
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - name: 📥 Checkout
+      uses: actions/checkout@v4
+    - name: 🐍 Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    - name: 🌐 Install Chrome
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y google-chrome-stable xvfb wget unzip
+    - name: 📦 Install deps
+      run: |
+        pip install gspread selenium beautifulsoup4 webdriver-manager
+    - name: 🔐 Setup secrets
+      run: |
+        echo '${{ secrets.GSPREAD_CREDENTIALS }}' > credentials.json
+        echo '${{ secrets.TRADINGVIEW_COOKIES }}' > cookies.json
+    - name: 🚀 Run scraper
+      env:
+        START_INDEX: 2000
+        END_INDEX: 2500
+        SHARD_INDEX: 4
+        SHARD_STEP: 5
+        CHECKPOINT_FILE: "checkpoint_chunk4.txt"
+      run: python run_scraper.py
+    - name: 📊 Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: tradingview-2000-2500-${{ github.run_id }}
+        path: |
+          checkpoint_*.txt
+          credentials.json
+          cookies.json
+          *.log
+        retention-days: 30
