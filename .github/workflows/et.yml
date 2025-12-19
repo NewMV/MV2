@@ -1,4 +1,4 @@
-name: ET Money Sector Scraper
+name: ET Money Sector Scraper et
 
 on:
   workflow_dispatch:
