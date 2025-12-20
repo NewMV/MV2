@@ -1,0 +1,42 @@
+name: TradingView Scraper - 501 to 1000
+on:
+  workflow_dispatch:
+
+jobs:
+  scrape-501-1000:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        pip install selenium gspread beautifulsoup4 webdriver-manager oauth2client
+
+    - name: Download credentials
+      env:
+        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+      run: echo "$GSPREAD_CREDENTIALS" > credentials.json
+
+    - name: Download cookies
+      env:
+        TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
+      run: echo "$TRADINGVIEW_COOKIES" > cookies.json
+
+    - name: Run scraper
+      env:
+        START_INDEX: 500
+        END_INDEX: 999
+        CHECKPOINT_FILE: checkpoint_501_1000.txt
+      run: python run_scraper.py
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: checkpoint-501-1000
+        path: checkpoint_501_1000.txt
