@@ -1,53 +1,42 @@
-name: TradingView Scraper - TEST 250 Symbols
+name: TradingView Scraper - 1 to 500
 on:
   workflow_dispatch:
 
 jobs:
-  test-250-symbols:
+  scrape-1-500:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-    
+
     - name: Install dependencies
       run: |
         pip install selenium gspread beautifulsoup4 webdriver-manager oauth2client
-    
+
     - name: Download credentials
       env:
         GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-      run: |
-        echo "$GSPREAD_CREDENTIALS" > credentials.json
-    
-    # ✅ FIXED: Direct JSON write (no base64)
+      run: echo "$GSPREAD_CREDENTIALS" > credentials.json
+
     - name: Download cookies
-      if: env.TRADINGVIEW_COOKIES != ''
       env:
         TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
-      run: |
-        echo "$TRADINGVIEW_COOKIES" > cookies.json
-        echo "✅ Cookies file created ($(wc -c < cookies.json) bytes)"
-    
-    - name: Run scraper - FIRST 250 symbols
+      run: echo "$TRADINGVIEW_COOKIES" > cookies.json
+
+    - name: Run scraper
       env:
-        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-        SHARD_INDEX: 0
-        SHARD_STEP: 1
         START_INDEX: 0
-        END_INDEX: 249
-        CHECKPOINT_FILE: checkpoint_test_250.txt
+        END_INDEX: 499
+        CHECKPOINT_FILE: checkpoint_1_500.txt
       run: python run_scraper.py
-    
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+
+    - uses: actions/upload-artifact@v4
       with:
-        name: checkpoint-test-250
-        path: |
-          checkpoint_test_250.txt
-          cookies.json
+        name: checkpoint-1-500
+        path: checkpoint_1_500.txt
