@@ -1,25 +1,55 @@
-name: TradingView Chunk 0 (0-249)
+name: TradingView Scraper - TEST 250 Symbols
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 7 * * 2'
+  workflow_dispatch:  # Manual trigger button
+
 jobs:
-  scrape:
+  test-250-symbols:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120  # 2 hours safety
+    
     steps:
     - uses: actions/checkout@v4
-    - uses: actions/setup-python@v4
-      with: { python-version: '3.10' }
-    - run: sudo apt-get update -qq && sudo apt-get install -y google-chrome-stable xvfb
-    - run: pip install gspread selenium beautifulsoup4 webdriver-manager
-    - run: |
-        echo '${{ secrets.GSPREAD_CREDENTIALS }}' > credentials.json
-        echo '${{ secrets.TRADINGVIEW_COOKIES }}' > cookies.json
-    - run: python run_scraper.py
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install selenium gspread beautifulsoup4 webdriver-manager oauth2client
+    
+    - name: Download credentials
       env:
-        START_INDEX: 0
-        END_INDEX: 249
+        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+      run: |
+        echo "$GSPREAD_CREDENTIALS" > credentials.json
+    
+    - name: Download cookies
+      if: env.TRADINGVIEW_COOKIES != ''
+      env:
+        TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
+      run: |
+        echo "$TRADINGVIEW_COOKIES" | base64 -d > cookies.json
+    
+    - name: Run scraper - FIRST 250 symbols
+      env:
+        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
         SHARD_INDEX: 0
-        SHARD_STEP: 10
-        CHECKPOINT_FILE: checkpoint_chunk0.txt
+        SHARD_STEP: 1
+        START_INDEX: 0
+        END_INDEX: 249  # Rows 2-251 = 250 symbols
+        CHECKPOINT_FILE: checkpoint_test_250.txt
+      run: python optimized_scraper.py
+    
+    - name: Upload checkpoint
+      uses: actions/upload-artifact@v4
+      with:
+        name: checkpoint-test-250
+        path: checkpoint_test_0.txt
+    
+    - name: Success summary
+      run: |
+        echo "✅ TEST COMPLETE: First 250 symbols scraped!"
+        echo "📊 Check Sheet5 rows 2-251"
+        echo "🔄 Full run: Change END_INDEX=2500"
