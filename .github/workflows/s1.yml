@@ -40,7 +40,7 @@ jobs:
         START_INDEX: 0
         END_INDEX: 249  # Rows 2-251 = 250 symbols
         CHECKPOINT_FILE: checkpoint_test_250.txt
-      run: python optimized_scraper.py
+      run: python run_scraper.py
     
     - name: Upload checkpoint
       uses: actions/upload-artifact@v4
