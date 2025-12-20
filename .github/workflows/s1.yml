@@ -24,9 +24,10 @@ jobs:
           beautifulsoup4==4.14.3 \
           webdriver-manager==4.0.2
     
-    - name: BATCH READ Sheet1
+    - name: BATCH READ Sheet1 + Calculate Shard
       env:
         GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+        SHARD_INDEX: ${{ matrix.shard }}
       run: |
         echo "$GSPREAD_CREDENTIALS" > credentials.json
         
@@ -39,13 +40,15 @@ jobs:
         with open('data_rows.json', 'w') as f: json.dump(data, f)
         "
         
-        SHARD_INDEX=${{ matrix.shard }}
+        # BASH MATH (works everywhere)
+        SHARD_INDEX=$SHARD_INDEX
         START_INDEX=$((SHARD_INDEX * 100))
         END_INDEX=$((START_INDEX + 99))
-        echo "Shard ${{ matrix.shard }}: Rows $((START_INDEX+2))-$((END_INDEX+2))"
+        echo "Shard $SHARD_INDEX: Rows $((START_INDEX+2))-$((END_INDEX+2))"
         echo "START_INDEX=$START_INDEX" >> $GITHUB_ENV
         echo "END_INDEX=$END_INDEX" >> $GITHUB_ENV
-        echo "CHECKPOINT_FILE=checkpoint_shard_${{ matrix.shard }}.txt" >> $GITHUB_ENV
+        echo "SHARD_INDEX=$SHARD_INDEX" >> $GITHUB_ENV
+        echo "CHECKPOINT_FILE=checkpoint_shard_${SHARD_INDEX}.txt" >> $GITHUB_ENV
     
     - name: Setup cookies
       env:
@@ -57,10 +60,6 @@ jobs:
       env:
         GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
         TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
-        START_INDEX: ${{ matrix.shard * 100 }}
-        END_INDEX: ${{ (matrix.shard * 100) + 99 }}
-        SHARD_INDEX: ${{ matrix.shard }}
-        CHECKPOINT_FILE: checkpoint_shard_${{ matrix.shard }}.txt
       run: python run_scraper.py
     
     - name: Upload checkpoint
