@@ -34,26 +34,28 @@ except Exception as e:
 
 current_date = date.today().strftime("%m/%d/%Y")
 
-# ---------------- FIXED API DATA FETCH ---------------- #
+# ---------------- FIXED API DATA FETCH (INDIA MARKET) ---------------- #
 def fetch_batch_data(symbol_names):
-    """Fetches data for multiple symbols at once to avoid 'N/A' shifts."""
+    """Fetches data specifically from the INDIA market to avoid 'N/A'."""
     try:
-        # Define the 14 indicators you need
         indicators = [
             'close', 'volume', 'RSI', 'MACD.macd', 'MACD.signal', 
             'open', 'high', 'low', 'EMA10', 'EMA20', 'SMA50', 'SMA200', 'Mom', 'change'
         ]
         
-        # Build Query: select 'name' + indicators
-        q = Query().select('name', *indicators).where(Column('name').isin(symbol_names))
+        # KEY FIX: Added .set_markets('india') to find NSE/BSE stocks
+        q = (Query()
+             .set_markets('india') 
+             .select('name', *indicators)
+             .where(Column('name').isin(symbol_names)))
         
         count, df = q.get_scanner_data()
         
         results = {}
         if not df.empty:
             for _, row in df.iterrows():
-                # Extracting values starting after 'ticker' and 'name' columns
-                # row.values[0] is ticker, row.values[1] is name
+                # Extracting values. Row: [ticker, name, close, volume, ...]
+                # row.values[2:] gets everything after 'ticker' and 'name'
                 data_points = [str(val) if val is not None else "N/A" for val in row.values[2:]]
                 results[row['name']] = data_points
         return results
@@ -61,22 +63,21 @@ def fetch_batch_data(symbol_names):
         print(f"  ❌ API Error: {e}")
         return {}
 
-# ---------------- MAIN LOOP (BATCH PROCESSING) ---------------- #
+# ---------------- MAIN LOOP ---------------- #
 batch_size = 5
 for i in range(last_i, min(len(data_rows), END_INDEX + 1), batch_size):
-    # Get symbols for this batch
     current_batch_rows = data_rows[i : i + batch_size]
-    symbols = [row[0].strip().upper() for row in current_batch_rows]
+    # Ensure symbols are clean and uppercase
+    symbols = [row[0].strip().upper() for row in current_batch_rows if row[0]]
     
-    print(f"🚀 Processing: {symbols}")
+    if not symbols: continue
     
-    # Single API call for the whole batch
+    print(f"🚀 Fetching India Market: {symbols}")
     api_results = fetch_batch_data(symbols)
     
     upload_data = []
     for row in current_batch_rows:
         name = row[0].strip().upper()
-        # Retrieve values or fill with N/A if missing from API response
         vals = api_results.get(name, ["N/A"] * 14)
         upload_data.append([name, current_date] + vals)
     
@@ -89,6 +90,6 @@ for i in range(last_i, min(len(data_rows), END_INDEX + 1), batch_size):
     except Exception as e:
         print(f"❌ Write error: {e}")
     
-    time.sleep(1.5) # Prevent rate limiting
+    time.sleep(1) # Faster than Selenium but still polite
 
 print("\n🏁 Process finished.")
