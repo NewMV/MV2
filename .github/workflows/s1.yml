@@ -1,53 +1,39 @@
-name: TradingView Scraper - TEST 250 Symbols
-on:
-  workflow_dispatch:
+name: TradingView 25x Parallel (2500 stocks → 10 mins)
+on: workflow_dispatch
 
 jobs:
-  test-250-symbols:
+  scrape-all:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    strategy:
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]
+    timeout-minutes: 60
     
     steps:
     - uses: actions/checkout@v4
     
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - uses: actions/setup-python@v5
       with:
         python-version: '3.11'
     
-    - name: Install dependencies
-      run: |
-        pip install selenium gspread beautifulsoup4 webdriver-manager oauth2client
+    - run: pip install selenium gspread beautifulsoup4 webdriver-manager
     
-    - name: Download credentials
-      env:
+    - env:
         GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-      run: |
-        echo "$GSPREAD_CREDENTIALS" > credentials.json
+      run: echo "$GSPREAD_CREDENTIALS" > credentials.json
     
-    # ✅ FIXED: Direct JSON write (no base64)
-    - name: Download cookies
-      if: env.TRADINGVIEW_COOKIES != ''
-      env:
+    - env:
+        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
         TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
-      run: |
-        echo "$TRADINGVIEW_COOKIES" > cookies.json
-        echo "✅ Cookies file created ($(wc -c < cookies.json) bytes)"
-    
-    - name: Run scraper - FIRST 250 symbols
-      env:
-        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-        SHARD_INDEX: 0
-        SHARD_STEP: 1
-        START_INDEX: 0
-        END_INDEX: 249
-        CHECKPOINT_FILE: checkpoint_test_250.txt
+        SHARD_INDEX: ${{ matrix.shard }}
+        SHARD_STEP: 25
+        START_INDEX: ${{ matrix.shard * 100 }}
+        END_INDEX: ${{ (matrix.shard * 100) + 99 }}
+        CHECKPOINT_FILE: checkpoint_shard_${{ matrix.shard }}.txt
       run: python run_scraper.py
     
-    - name: Upload artifacts
+    - name: Upload shard checkpoint
       uses: actions/upload-artifact@v4
       with:
-        name: checkpoint-test-250
-        path: |
-          checkpoint_test_250.txt
-          cookies.json
+        name: checkpoint-shard-${{ matrix.shard }}
+        path: checkpoint_shard_${{ matrix.shard }}.txt
