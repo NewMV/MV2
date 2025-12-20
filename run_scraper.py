@@ -2,6 +2,10 @@ import os, time, json, gspread, requests
 from datetime import date
 
 # ---------------- CONFIG ---------------- #
+# This matches the 'Technicals' page. 
+# Use "" for 1-Day, "|1" for 1-Min, "|5" for 5-Min, "|60" for 1-Hour
+TF = "|1" 
+
 STOCK_LIST_URL = "https://docs.google.com/spreadsheets/d/1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4/edit?gid=0#gid=0"
 NEW_MV2_URL    = "https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc/edit?gid=0#gid=0"
 
@@ -17,67 +21,55 @@ except Exception as e:
 
 current_date = date.today().strftime("%m/%d/%Y")
 
-def get_tradingview_data_multi_market(symbol):
-    """Checks India and Global scanners for the symbol data"""
-    # Markets to check: 'india' for NSE/BSE, 'global' for US/Others
-    markets = ["india", "global"]
+def get_exact_tv_values(symbol):
+    """Hits the same internal API that the Technicals Tab uses"""
+    # Try India scanner first (for 20MICRONS, etc.), then Global
+    scanners = ["india", "global"]
     
-    # These are the standard TV internal names for Technical columns
+    # These are the 14 columns usually found in the Technicals 'Oscillators' and 'MAs' tables
     columns = [
-        "Recommend.All", "RSI", "Stoch.K", "Stoch.D", 
-        "EMA10", "SMA10", "EMA20", "SMA20", 
-        "EMA30", "SMA30", "EMA50", "SMA50", 
-        "EMA100", "SMA100"
+        f"RSI{TF}", f"Stoch.K{TF}", f"CCI20{TF}", f"ADX{TF}", f"AO{TF}", f"Mom{TF}", f"MACD.macd{TF}",
+        f"EMA10{TF}", f"SMA10{TF}", f"EMA20{TF}", f"SMA20{TF}", f"EMA50{TF}", f"SMA50{TF}", f"EMA100{TF}"
     ]
 
-    for market in markets:
-        url = f"https://scanner.tradingview.com/{market}/scan"
+    for scan in scanners:
+        url = f"https://scanner.tradingview.com/{scan}/scan"
+        # We try both NSE and US exchange formats
+        tickers = [f"NSE:{symbol.upper()}", f"NASDAQ:{symbol.upper()}", f"NYSE:{symbol.upper()}"]
         
-        # We try both just the symbol AND the exchange prefix
-        tickers_to_try = [f"NSE:{symbol.upper()}", f"BSE:{symbol.upper()}", symbol.upper()]
+        payload = {"symbols": {"tickers": tickers}, "columns": columns}
         
-        payload = {
-            "symbols": {"tickers": tickers_to_try},
-            "columns": columns
-        }
-
         try:
-            response = requests.post(url, json=payload, timeout=10)
-            data = response.json()
-            if "data" in data and len(data["data"]) > 0:
-                # Find the first one that returned data
-                values = data["data"][0]["d"]
-                return [str(round(v, 2)) if isinstance(v, (int, float)) else "0.00" for v in values]
+            res = requests.post(url, json=payload, timeout=10).json()
+            if "data" in res and len(res["data"]) > 0:
+                raw_values = res["data"][0]["d"]
+                # Clean and round exactly like the TV UI
+                return [str(round(v, 2)) if isinstance(v, (int, float)) else "—" for v in raw_values]
         except:
             continue
-            
     return ["N/A"] * 14
 
 # ---------------- MAIN LOOP ---------------- #
-print(f"🚀 Starting Universal Scrape (Fixed for Indian Markets)...")
+print(f"🚀 Starting Exact-Match Scrape (Timeframe: {TF if TF else 'Daily'})...")
 
 for i, row in enumerate(data_rows):
-    raw_name = row[0].strip()
-    target_row = i + 2
+    name = row[0].strip()
+    target_row = i + 2 # Matches your original mapping
     
-    print(f"🔎 [{i+1}] Processing: {raw_name}...", end=" ")
+    print(f"🔎 [{i+1}] {name}...", end=" ", flush=True)
     
-    # Get values via Multi-Market API
-    vals = get_tradingview_data_multi_market(raw_name)
+    vals = get_exact_tv_values(name)
     
-    if "N/A" in vals:
-        print("❌ Failed")
-    else:
-        print(f"✅ Success: {vals[0]}")
+    # Build final row: [Name, Date, Value1, Value2, ... Value14]
+    final_data = [name, current_date] + vals
     
-    # Write to Sheet
-    row_data = [raw_name, current_date] + vals
     try:
-        dest_sheet.update(f"A{target_row}", [row_data])
+        dest_sheet.update(f"A{target_row}", [final_data])
+        print(f"✅ (Value: {vals[0]})")
     except Exception as e:
         print(f"❌ Write Error: {e}")
 
-    # Faster sleep (API can handle it)
-    time.sleep(0.2)
+    # Very fast delay - API is robust
+    time.sleep(0.1)
 
-print("🏁 Done.")
+print("🏁 Process Complete.")
