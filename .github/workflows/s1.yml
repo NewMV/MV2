@@ -1,69 +1,38 @@
-name: 🚀 TradingView 25x Parallel + BATCH READ (10 mins)
+name: 🚀 TradingView 500 Symbols - Shard 0 (Rows 2-501)
 on: workflow_dispatch
 
 jobs:
-  ultra-fast-scrape:
+  scrape-shard-0:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]
-    timeout-minutes: 90
+    timeout-minutes: 30
     
     steps:
     - uses: actions/checkout@v4
-    
     - uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies (FAST)
-      run: |
-        pip install --quiet --no-cache-dir \
-          selenium==4.39.0 \
-          gspread==6.2.1 \
-          beautifulsoup4==4.14.3 \
-          webdriver-manager==4.0.2
-    
-    - name: BATCH READ Sheet1 + Calculate Shard
+      with: python-version: '3.11'
+    - name: Install deps
+      run: pip install selenium gspread beautifulsoup4 webdriver-manager
+    - name: Credentials
       env:
         GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-        SHARD_INDEX: ${{ matrix.shard }}
-      run: |
-        echo "$GSPREAD_CREDENTIALS" > credentials.json
-        
-        python -c "
-        import gspread, json
-        client = gspread.service_account('credentials.json')
-        sheet = client.open_by_url('https://docs.google.com/spreadsheets/d/1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4').worksheet('Sheet1')
-        data = sheet.get_all_values()[1:]
-        print(f'✅ BATCH READ: {len(data)} rows')
-        with open('data_rows.json', 'w') as f: json.dump(data, f)
-        "
-        
-        # BASH MATH (works everywhere)
-        SHARD_INDEX=$SHARD_INDEX
-        START_INDEX=$((SHARD_INDEX * 100))
-        END_INDEX=$((START_INDEX + 99))
-        echo "Shard $SHARD_INDEX: Rows $((START_INDEX+2))-$((END_INDEX+2))"
-        echo "START_INDEX=$START_INDEX" >> $GITHUB_ENV
-        echo "END_INDEX=$END_INDEX" >> $GITHUB_ENV
-        echo "SHARD_INDEX=$SHARD_INDEX" >> $GITHUB_ENV
-        echo "CHECKPOINT_FILE=checkpoint_shard_${SHARD_INDEX}.txt" >> $GITHUB_ENV
-    
-    - name: Setup cookies
-      env:
-        TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
-      if: env.TRADINGVIEW_COOKIES != ''
-      run: echo "$TRADINGVIEW_COOKIES" > cookies.json
-    
-    - name: Run scraper
+      run: echo "$GSPREAD_CREDENTIALS" > credentials.json
+    - name: Scrape 500 symbols
       env:
         GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-        TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
+        START_INDEX: 0
+        END_INDEX: 499
+        CHECKPOINT_FILE: shard0_checkpoint.txt
       run: python run_scraper.py
-    
-    - name: Upload checkpoint
-      uses: actions/upload-artifact@v4
-      with:
-        name: checkpoint-shard-${{ matrix.shard }}
-        path: checkpoint_shard_*.txt
+    - name: Verify Sheet5 rows 2-501
+      env:
+        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+      run: |
+        echo "$GSPREAD_CREDENTIALS" > creds.json
+        python -c "
+import gspread
+client = gspread.service_account('creds.json')
+sheet = client.open_by_url('https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc').worksheet('Sheet5')
+print('✅ Shard 0: Rows 2-501 COMPLETE')
+print(f'Row 2: {sheet.cell(2,1).value[:20]}...')
+print(f'Row 501: {sheet.cell(501,1).value[:20]}...')
+"
