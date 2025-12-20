@@ -1,38 +1,53 @@
-name: 🚀 TradingView 500 Symbols - Shard 0 (Rows 2-501)
-on: workflow_dispatch
+name: TradingView Scraper - TEST 250 Symbols
+on:
+  workflow_dispatch:
 
 jobs:
-  scrape-shard-0:
+  test-250-symbols:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     
     steps:
     - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
-      with: python-version: '3.11'
-    - name: Install deps
-      run: pip install selenium gspread beautifulsoup4 webdriver-manager
-    - name: Credentials
-      env:
-        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-      run: echo "$GSPREAD_CREDENTIALS" > credentials.json
-    - name: Scrape 500 symbols
-      env:
-        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-        START_INDEX: 0
-        END_INDEX: 499
-        CHECKPOINT_FILE: shard0_checkpoint.txt
-      run: python run_scraper.py
-    - name: Verify Sheet5 rows 2-501
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install selenium gspread beautifulsoup4 webdriver-manager oauth2client
+    
+    - name: Download credentials
       env:
         GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
       run: |
-        echo "$GSPREAD_CREDENTIALS" > creds.json
-        python -c "
-import gspread
-client = gspread.service_account('creds.json')
-sheet = client.open_by_url('https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc').worksheet('Sheet5')
-print('✅ Shard 0: Rows 2-501 COMPLETE')
-print(f'Row 2: {sheet.cell(2,1).value[:20]}...')
-print(f'Row 501: {sheet.cell(501,1).value[:20]}...')
-"
+        echo "$GSPREAD_CREDENTIALS" > credentials.json
+    
+    # ✅ FIXED: Direct JSON write (no base64)
+    - name: Download cookies
+      if: env.TRADINGVIEW_COOKIES != ''
+      env:
+        TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
+      run: |
+        echo "$TRADINGVIEW_COOKIES" > cookies.json
+        echo "✅ Cookies file created ($(wc -c < cookies.json) bytes)"
+    
+    - name: Run scraper - FIRST 250 symbols
+      env:
+        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+        SHARD_INDEX: 0
+        SHARD_STEP: 1
+        START_INDEX: 0
+        END_INDEX: 249
+        CHECKPOINT_FILE: checkpoint_test_250.txt
+      run: python run_scraper.py
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: checkpoint-test-250
+        path: |
+          checkpoint_test_250.txt
+          cookies.json
