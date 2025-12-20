@@ -1,25 +1,45 @@
-name: TradingView Chunk 0 (0-249)
+name: Scrape TradingView (Sharded)
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 7 * * 2'
+    - cron: "0 3 * * *"   # adjust as needed
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 330   # < 6h safety
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - { name: "0-499",   start: 0,   end: 499 }
+          - { name: "500-999", start: 500, end: 999 }
+          - { name: "1000-1499", start: 1000, end: 1499 }
+          - { name: "1500-1999", start: 1500, end: 1999 }
+          - { name: "2000-2500", start: 2000, end: 2500 }
+
+    name: Scrape shard ${{ matrix.shard.name }}
+
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v4
-      with: { python-version: '3.10' }
-    - run: sudo apt-get update -qq && sudo apt-get install -y google-chrome-stable xvfb
-    - run: pip install gspread selenium beautifulsoup4 webdriver-manager
-    - run: |
-        echo '${{ secrets.GSPREAD_CREDENTIALS }}' > credentials.json
-        echo '${{ secrets.TRADINGVIEW_COOKIES }}' > cookies.json
-    - run: python run_scraper.py
-      env:
-        START_INDEX: 0
-        END_INDEX: 249
-        SHARD_INDEX: 0
-        SHARD_STEP: 10
-        CHECKPOINT_FILE: checkpoint_chunk0.txt
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install selenium webdriver-manager beautifulsoup4 gspread oauth2client
+
+      - name: Run scraper
+        env:
+          START_INDEX: ${{ matrix.shard.start }}
+          END_INDEX: ${{ matrix.shard.end }}
+          GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+        run: |
+          python run_scraper.py
