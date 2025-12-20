@@ -1,11 +1,11 @@
 name: TradingView Scraper - TEST 250 Symbols
 on:
-  workflow_dispatch:  # Manual trigger button
+  workflow_dispatch:
 
 jobs:
   test-250-symbols:
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # 2 hours safety
+    timeout-minutes: 120
     
     steps:
     - uses: actions/checkout@v4
@@ -25,12 +25,14 @@ jobs:
       run: |
         echo "$GSPREAD_CREDENTIALS" > credentials.json
     
+    # ✅ FIXED: Direct JSON write (no base64)
     - name: Download cookies
       if: env.TRADINGVIEW_COOKIES != ''
       env:
         TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
       run: |
-        echo "$TRADINGVIEW_COOKIES" | base64 -d > cookies.json
+        echo "$TRADINGVIEW_COOKIES" > cookies.json
+        echo "✅ Cookies file created ($(wc -c < cookies.json) bytes)"
     
     - name: Run scraper - FIRST 250 symbols
       env:
@@ -38,18 +40,14 @@ jobs:
         SHARD_INDEX: 0
         SHARD_STEP: 1
         START_INDEX: 0
-        END_INDEX: 249  # Rows 2-251 = 250 symbols
+        END_INDEX: 249
         CHECKPOINT_FILE: checkpoint_test_250.txt
-      run: python run_scraper.py
+      run: python optimized_scraper.py
     
-    - name: Upload checkpoint
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: checkpoint-test-250
-        path: checkpoint_test_0.txt
-    
-    - name: Success summary
-      run: |
-        echo "✅ TEST COMPLETE: First 250 symbols scraped!"
-        echo "📊 Check Sheet5 rows 2-251"
-        echo "🔄 Full run: Change END_INDEX=2500"
+        path: |
+          checkpoint_test_250.txt
+          cookies.json
