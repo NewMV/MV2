@@ -1,49 +1,30 @@
-name: TradingView Scraper - 1 to 500
-on:
-  workflow_dispatch:
+name: 🚀 TradingView 500 Stocks (5 shards → 5 mins)
+on: workflow_dispatch
 
 jobs:
-  scrape-1-500:
+  scrape-500:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-
+    strategy:
+      matrix:
+        shard: [0,1,2,3,4]  # 5 shards × 100 = 500 stocks
+      max-parallel: 5
+    timeout-minutes: 15
+    
     steps:
     - uses: actions/checkout@v4
-
-    - name: Set up Python
+    
+    - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-
+    
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        # Added missing pandas, requests, and openpyxl
-        pip install pandas requests selenium gspread beautifulsoup4 webdriver-manager openpyxl
-
-    - name: Download credentials
+        pip install --quiet selenium gspread beautifulsoup4 webdriver-manager lxml
+    
+    - name: Run OPTIMIZED scraper
       env:
+        START_INDEX: ${{ (matrix.shard * 100) }}
+        END_INDEX: ${{ (matrix.shard * 100) + 99 }}
         GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-      run: echo "$GSPREAD_CREDENTIALS" > credentials.json
-
-    - name: Download cookies
-      env:
-        TRADINGVIEW_COOKIES: ${{ secrets.TRADINGVIEW_COOKIES }}
-      run: echo "$TRADINGVIEW_COOKIES" > cookies.json
-
-    - name: Run scraper
-      env:
-        # These environment variables guide the Python script logic
-        START_INDEX: 0
-        END_INDEX: 499
-        SHARD_INDEX: 0
-        SHARD_STEP: 1
-        CHECKPOINT_FILE: checkpoint_1_500.txt
       run: python run_scraper.py
-
-    - name: Upload checkpoint
-      if: always() # Ensures the checkpoint is saved even if the script fails
-      uses: actions/upload-artifact@v4
-      with:
-        name: checkpoint-1-500
-        path: checkpoint_1_500.txt
