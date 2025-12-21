@@ -1,6 +1,6 @@
 import os, time, json, gspread
 from datetime import date
-from tradingview_ta import TA_Handler, Interval, Exchange
+from tradingview_ta import TA_Handler, Interval
 
 # ---------------- CONFIG ---------------- #
 STOCK_LIST_URL = "https://docs.google.com/spreadsheets/d/1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4/edit?gid=0#gid=0"
@@ -8,52 +8,58 @@ NEW_MV2_URL    = "https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucC
 
 START_INDEX = int(os.getenv("START_INDEX", "0"))
 END_INDEX   = int(os.getenv("END_INDEX", "2500"))
-CHECKPOINT_FILE = os.getenv("CHECKPOINT_FILE", "checkpoint.txt")
+CHECKPOINT_FILE = "checkpoint.txt"
 
-# ---------------- AUTH & CONNECT ---------------- #
+# ---------------- GOOGLE SHEETS AUTH ---------------- #
 try:
     creds_json = os.getenv("GSPREAD_CREDENTIALS")
-    client = gspread.service_account_from_dict(json.loads(creds_json)) if creds_json else gspread.service_account(filename="credentials.json")
+    if creds_json:
+        client = gspread.service_account_from_dict(json.loads(creds_json))
+    else:
+        client = gspread.service_account(filename="credentials.json")
+        
     source_sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
     dest_sheet   = client.open_by_url(NEW_MV2_URL).worksheet("Sheet5")
-    data_rows = source_sheet.get_all_values()[1:]
+    data_rows = source_sheet.get_all_values()[1:] 
+    print("✅ Connected to Sheets")
 except Exception as e:
-    print(f"❌ Auth Error: {e}"); raise
+    print(f"❌ Connection Error: {e}"); raise
 
 current_date = date.today().strftime("%m/%d/%Y")
 
-def get_tv_data(symbol):
-    """Fetches 14 technical values via TradingView WebSocket Protocol"""
+# ---------------- WEBSOCKET DATA FETCH ---------------- #
+def get_technical_data(symbol):
+    """Explicitly fetches the 14 indicators via WebSocket protocol"""
     try:
-        # We assume NSE for Indian stocks, change Exchange.NASDAQ for US
+        # Note: Change exchange="NASDAQ" and screener="america" for US stocks
         handler = TA_Handler(
             symbol=symbol,
-            exchange="NSE", 
+            exchange="NSE",
             screener="india",
-            interval=Interval.INTERVAL_1_DAY
+            interval=Interval.INTERVAL_1_DAY,
+            timeout=None
         )
         analysis = handler.get_analysis()
-        
-        # Mapping 14 specific technical indicators
-        osc = analysis.indicators
+        ind = analysis.indicators
+
+        # Exactly mapping the 14 indicators requested
         return [
-            str(osc.get("close")),          # 1. Current Price
-            str(osc.get("change")),         # 2. Change
-            str(osc.get("RSI")),            # 3. RSI (14)
-            str(osc.get("Stoch.K")),        # 4. Stochastic %K
-            str(osc.get("CCI")),            # 5. CCI (20)
-            str(osc.get("ADX")),            # 6. ADX (14)
-            str(osc.get("AO")),             # 7. Awesome Oscillator
-            str(osc.get("Mom")),            # 8. Momentum (10)
-            str(osc.get("MACD.macd")),      # 9. MACD Level
-            str(osc.get("Stoch.RSI.K")),    # 10. Stoch RSI
-            str(osc.get("BBPower")),        # 11. Bull Bear Power
-            str(osc.get("EMA10")),          # 12. EMA 10
-            str(osc.get("SMA10")),          # 13. SMA 10
-            analysis.summary.get("RECOMMENDATION") # 14. Overall Verdict
+            str(ind.get("close")),        # 1. Price
+            str(ind.get("change")),       # 2. Change Abs
+            str(ind.get("RSI")),          # 3. RSI (14)
+            str(ind.get("Stoch.K")),      # 4. Stochastic %K
+            str(ind.get("CCI")),          # 5. CCI (20)
+            str(ind.get("ADX")),          # 6. ADX (14)
+            str(ind.get("AO")),           # 7. Awesome Oscillator
+            str(ind.get("Mom")),          # 8. Momentum (10)
+            str(ind.get("MACD.macd")),    # 9. MACD Level
+            str(ind.get("Stoch.RSI.K")),  # 10. Stoch RSI
+            str(ind.get("W.R")),          # 11. Williams %R
+            str(ind.get("BBPower")),      # 12. Bull Bear Power
+            str(ind.get("UO")),           # 13. Ultimate Oscillator
+            str(analysis.summary.get("RECOMMENDATION")) # 14. Verdict
         ]
     except Exception as e:
-        print(f"  ⚠️ Socket Fail for {symbol}: {e}")
         return ["N/A"] * 14
 
 # ---------------- MAIN LOOP ---------------- #
@@ -66,28 +72,33 @@ if os.path.exists(CHECKPOINT_FILE):
 batch = []
 batch_start = None
 
-print(f"🚀 WebSocket Processing: Rows {START_INDEX+2} to {END_INDEX+2}")
+print(f"🚀 Processing {START_INDEX} to {END_INDEX} via WebSocket")
 
 for i, row in enumerate(data_rows):
-    if i < last_i or i < START_INDEX or i > END_INDEX: continue
+    if i < last_i or i < START_INDEX or i > END_INDEX:
+        continue
 
     symbol = row[0].strip()
-    if batch_start is None: batch_start = i + 2
+    target_row = i + 2
+    if batch_start is None: batch_start = target_row
 
-    print(f"[{i}] Fetching {symbol}...", end="\r")
-    
-    vals = get_tv_data(symbol)
+    print(f"🔎 [{i}] {symbol} -> Row {target_row}")
+
+    vals = get_technical_data(symbol)
     batch.append([symbol, current_date] + vals)
 
-    # Batch save every 10 (Faster since WebSocket is quick)
+    # Batch Update (Fast: 10 symbols per update)
     if len(batch) >= 10:
-        dest_sheet.update(f"A{batch_start}", batch)
-        with open(CHECKPOINT_FILE, "w") as f: f.write(str(i + 1))
-        batch, batch_start = [], None
-        time.sleep(1) # Brief pause to respect Google Sheets rate limit
+        try:
+            dest_sheet.update(f"A{batch_start}", batch)
+            with open(CHECKPOINT_FILE, "w") as f: f.write(str(i + 1))
+            batch, batch_start = [], None
+            time.sleep(1.5) # Prevent Google API rate limit
+        except Exception as e:
+            print(f"❌ Write Error: {e}")
 
 # Final Flush
 if batch:
     dest_sheet.update(f"A{batch_start}", batch)
 
-print("\n🏁 Process finished via WebSocket.")
+print("\n🏁 Process finished successfully.")
