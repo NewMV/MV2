@@ -1,14 +1,30 @@
-name: 🚀 TradingView 500 Stocks (5 shards → 5 mins) ✅ FIXED
-on: workflow_dispatch
+name: 🚀 Ultra-Fast Stock Scraper (500 Symbols)
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_index:
+        description: 'Start Index'
+        required: true
+        default: '0'
+        type: number
+      end_index:
+        description: 'End Index (500 recommended)'
+        required: true
+        default: '500'
+        type: number
+  schedule:
+    - cron: '0 2 * * 1-5'  # Mon-Fri 2AM UTC
+
+env:
+  START_INDEX: ${{ github.event.inputs.start_index || 0 }}
+  END_INDEX: ${{ github.event.inputs.end_index || 500 }}
+  MAX_WORKERS: 8
 
 jobs:
-  scrape-500:
+  scrape-fast:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        shard: [0,1,2,3,4]
-      max-parallel: 5
-    timeout-minutes: 15
+    timeout-minutes: 45
     
     steps:
     - uses: actions/checkout@v4
@@ -17,26 +33,32 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-    
-    - name: Install dependencies
-      run: pip install --quiet selenium gspread beautifulsoup4 webdriver-manager lxml
-    
-    - name: Calculate shard range & Run scraper
-      env:
-        SHARD: ${{ matrix.shard }}
-        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+        
+    - name: Install Dependencies
       run: |
-        START_INDEX=$((SHARD * 100))
-        END_INDEX=$((START_INDEX + 99))
-        if [ $SHARD -eq 4 ]; then END_INDEX=499; fi
+        pip install gspread oauth2client selenium beautifulsoup4 webdriver-manager
         
-        echo "Shard $SHARD: Rows $((START_INDEX+2))-$((END_INDEX+2)) (Python: $START_INDEX-$END_INDEX)"
-        echo "START_INDEX=$START_INDEX" >> $GITHUB_ENV
-        echo "END_INDEX=$END_INDEX" >> $GITHUB_ENV
+    - name: Setup Chrome
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y google-chrome-stable
         
-    - name: Run OPTIMIZED scraper
+    - name: Run Fast Scraper
       env:
-        START_INDEX: ${{ env.START_INDEX }}
-        END_INDEX: ${{ env.END_INDEX }}
         GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-      run: python run_scraper.py
+        MAX_WORKERS: 8
+      run: |
+        python run_scraper.py
+        
+    - name: Upload Checkpoint
+      uses: actions/upload-artifact@v4
+      with:
+        name: checkpoint
+        path: fast_checkpoint.txt
+        
+    - name: Notify Success
+      if: success()
+      uses: actions/slack-notify@v1
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+        SLACK_MESSAGE: '🚀 FAST Scraper Complete! 500 symbols processed.'
