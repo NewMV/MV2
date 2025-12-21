@@ -1,81 +1,25 @@
-name: 🚀 Ultra-Fast Stock Scraper (500 Symbols)
-
+name: TradingView Chunk 0 (0-249)
 on:
   workflow_dispatch:
-    inputs:
-      start_index:
-        description: 'Start Index'
-        required: true
-        default: '0'
-        type: number
-      end_index:
-        description: 'End Index (500 recommended)'
-        required: true
-        default: '500'
-        type: number
   schedule:
-    - cron: '0 2 * * 1-5'  # Mon-Fri 2AM UTC
-
-env:
-  START_INDEX: ${{ github.event.inputs.start_index || 0 }}
-  END_INDEX: ${{ github.event.inputs.end_index || 500 }}
-  MAX_WORKERS: 8
-
+    - cron: '0 7 * * 2'
 jobs:
-  scrape-fast:
+  scrape:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        
-    - name: Install Python Dependencies
-      run: |
-        pip install --upgrade pip
-        pip install gspread oauth2client selenium beautifulsoup4 webdriver-manager
-        
-    - name: Setup Chrome (Ubuntu 24.04 Fixed)
-      run: |
-        # Add Google Chrome repo
-        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
-        
-        # Update & install Chrome + deps (Ubuntu 24.04 compatible)
-        sudo apt-get update
-        sudo apt-get install -y \
-          google-chrome-stable \
-          xvfb \
-          libnss3 \
-          libatk-bridge2.0-0 \
-          libdrm2 \
-          libxkbcommon0 \
-          libxcomposite1 \
-          libxdamage1 \
-          libxrandr2 \
-          libgbm1 \
-          libasound2t64 \
-          fonts-liberation \
-          libu2f-udev \
-          libvulkan1
-        
-    - name: Run Fast Scraper
+    - uses: actions/setup-python@v4
+      with: { python-version: '3.10' }
+    - run: sudo apt-get update -qq && sudo apt-get install -y google-chrome-stable xvfb
+    - run: pip install gspread selenium beautifulsoup4 webdriver-manager
+    - run: |
+        echo '${{ secrets.GSPREAD_CREDENTIALS }}' > credentials.json
+        echo '${{ secrets.TRADINGVIEW_COOKIES }}' > cookies.json
+    - run: python run_scraper.py
       env:
-        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-        MAX_WORKERS: 8
-      run: |
-        python run_scraper.py
-        
-    - name: Upload Results
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: scraper-results
-        path: |
-          fast_checkpoint.txt
-          *.log
-        retention-days: 7
+        START_INDEX: 0
+        END_INDEX: 249
+        SHARD_INDEX: 0
+        SHARD_STEP: 10
+        CHECKPOINT_FILE: checkpoint_chunk0.txt
