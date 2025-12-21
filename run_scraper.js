@@ -25,13 +25,19 @@ if (fs.existsSync(CHECKPOINT_FILE)) {
 console.log(`🔧 Range ${START_INDEX}-${END_INDEX} | Resume ${last_i}`);
 
 // ---------------- GOOGLE SHEETS ---------------- //
+import { GoogleSpreadsheet } from "google-spreadsheet";
+import { JWT } from "google-auth-library";
+
 const creds = JSON.parse(process.env.GSPREAD_CREDENTIALS);
 
-const srcDoc = new GoogleSpreadsheet(STOCK_LIST_URL);
-const dstDoc = new GoogleSpreadsheet(NEW_MV2_URL);
+const auth = new JWT({
+  email: creds.client_email,
+  key: creds.private_key,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+});
 
-await srcDoc.useServiceAccountAuth(creds);
-await dstDoc.useServiceAccountAuth(creds);
+const srcDoc = new GoogleSpreadsheet(STOCK_LIST_URL, auth);
+const dstDoc = new GoogleSpreadsheet(NEW_MV2_URL, auth);
 
 await srcDoc.loadInfo();
 await dstDoc.loadInfo();
@@ -40,7 +46,9 @@ const sourceSheet = srcDoc.sheetsByTitle["Sheet1"];
 const destSheet   = dstDoc.sheetsByTitle["Sheet5"];
 
 const rows = await sourceSheet.getRows();
+
 console.log("✅ Google Sheets connected");
+
 
 // ---------------- BROWSER ---------------- //
 const browser = await puppeteer.launch({
