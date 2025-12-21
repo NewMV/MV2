@@ -38,10 +38,10 @@ jobs:
       run: |
         pip install gspread oauth2client selenium beautifulsoup4 webdriver-manager
         
-    - name: Setup Chrome
+    - name: Setup Chrome & Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y google-chrome-stable
+        sudo apt-get install -y google-chrome-stable xvfb libnss3 libgconf-2-4 libxss1 libasound2
         
     - name: Run Fast Scraper
       env:
@@ -50,15 +50,18 @@ jobs:
       run: |
         python run_scraper.py
         
-    - name: Upload Checkpoint
+    - name: Upload Checkpoint & Logs
       uses: actions/upload-artifact@v4
       with:
-        name: checkpoint
-        path: fast_checkpoint.txt
+        name: scraper-results
+        path: |
+          fast_checkpoint.txt
+          *.log
+        retention-days: 7
         
-    - name: Notify Success
+    - name: Success Summary
       if: success()
-      uses: actions/slack-notify@v1
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
-        SLACK_MESSAGE: '🚀 FAST Scraper Complete! 500 symbols processed.'
+      run: |
+        echo "🎉 ULTRA-FAST SCRAPER COMPLETE!"
+        echo "✅ 500 symbols processed successfully"
+        echo "📊 Check Sheet5 for results"
