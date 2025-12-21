@@ -1,25 +1,42 @@
-name: TradingView Chunk 0 (0-249)
+name: TradingView Puppeteer Scraper
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 7 * * 2'
+    - cron: "30 1 * * *"   # Runs daily at 07:00 IST
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 360
+
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v4
-      with: { python-version: '3.10' }
-    - run: sudo apt-get update -qq && sudo apt-get install -y google-chrome-stable xvfb
-    - run: pip install gspread selenium beautifulsoup4 webdriver-manager
-    - run: |
-        echo '${{ secrets.GSPREAD_CREDENTIALS }}' > credentials.json
-        echo '${{ secrets.TRADINGVIEW_COOKIES }}' > cookies.json
-    - run: python run_scraper.py
-      env:
-        START_INDEX: 0
-        END_INDEX: 249
-        SHARD_INDEX: 0
-        SHARD_STEP: 10
-        CHECKPOINT_FILE: checkpoint_chunk0.txt
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 📦 Install dependencies
+        run: |
+          npm install
+
+      - name: 🧠 Create cookies.json
+        run: |
+          echo '${{ secrets.TRADINGVIEW_COOKIES }}' > cookies.json
+
+      - name: 🚀 Run TradingView Scraper
+        env:
+          GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+          START_INDEX: "0"
+          END_INDEX: "2500"
+        run: |
+          node run_scraper.js
+
+      - name: 💾 Upload checkpoint (optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoint
+          path: checkpoint.txt
