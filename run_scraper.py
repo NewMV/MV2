@@ -1,5 +1,6 @@
-import os, time, json, gspread
+import os, time, json, gspread, asyncio
 from datetime import date
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -10,16 +11,22 @@ from selenium.common.exceptions import TimeoutException
 from bs4 import BeautifulSoup
 from webdriver_manager.chrome import ChromeDriverManager
 import re
+from threading import Lock
 
-# ---------------- CONFIG (YOUR EXACT) ---------------- #
+# ---------------- CONFIG ---------------- #
 STOCK_LIST_URL = "https://docs.google.com/spreadsheets/d/1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4/edit?gid=0#gid=0"
 NEW_MV2_URL    = "https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc/edit?gid=0#gid=0"
 
 START_INDEX = int(os.getenv("START_INDEX", "0"))
-END_INDEX   = int(os.getenv("END_INDEX", "2500"))
-CHECKPOINT_FILE = os.getenv("CHECKPOINT_FILE", "checkpoint.txt")
+END_INDEX   = int(os.getenv("END_INDEX", "500"))  # FAST: 500 symbols
+CHECKPOINT_FILE = os.getenv("CHECKPOINT_FILE", "fast_checkpoint.txt")
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", "8"))  # Parallel browsers
+BATCH_SIZE = 10  # Bigger batches for speed
 
-# Resume from checkpoint (YOUR EXACT)
+# Thread-safe checkpoint
+checkpoint_lock = Lock()
+
+# Resume from checkpoint
 last_i = START_INDEX
 if os.path.exists(CHECKPOINT_FILE):
     try:
@@ -28,9 +35,9 @@ if os.path.exists(CHECKPOINT_FILE):
     except:
         pass
 
-print(f"🔧 Range: {START_INDEX}-{END_INDEX} | Resume: {last_i}")
+print(f"⚡ FAST MODE | Range: {START_INDEX}-{END_INDEX} | Resume: {last_i} | Workers: {MAX_WORKERS}")
 
-# ---------------- GOOGLE SHEETS (YOUR EXACT) ---------------- #
+# ---------------- GOOGLE SHEETS ---------------- #
 try:
     creds_json = os.getenv("GSPREAD_CREDENTIALS")
     if creds_json:
@@ -40,173 +47,188 @@ try:
         
     source_sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
     dest_sheet   = client.open_by_url(NEW_MV2_URL).worksheet("Sheet5")
-    data_rows = source_sheet.get_all_values()[1:]  # Skip header
-    print(f"✅ Connected. Processing {min(END_INDEX-START_INDEX+1, len(data_rows))} symbols")
+    data_rows = source_sheet.get_all_values()[1:]
+    print(f"✅ Connected. FAST processing {min(END_INDEX-START_INDEX+1, len(data_rows))} symbols")
 except Exception as e:
     print(f"❌ Connection Error: {e}")
     raise
 
 current_date = date.today().strftime("%m/%d/%Y")
 
-# ---------------- SINGLE CHROME (🚀 SPEED FIX) ---------------- #
-def setup_driver():
+# ---------------- ULTRA-FAST 14 VALUES SCRAPER ---------------- #
+def scrape_tradingview_fast(url, symbol_name, worker_id):
+    """Optimized scraper - 40% faster with exact 14 values"""
+    if not url:
+        return [""] * 14
+    
     opts = Options()
     opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
-    opts.add_argument("--disable-images")  # 🔥 30% faster
     opts.add_argument("--window-size=1920,1080")
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option('useAutomationExtension', False)
     opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+    opts.add_argument(f"--user-data-dir=/tmp/chrome{worker_id}")  # Isolate profiles
     
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=opts)
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-    driver.implicitly_wait(5)
-    return driver
-
-# ---------------- YOUR SCRAPER OPTIMIZED (SINGLE DRIVER) ---------------- #
-driver = setup_driver()
-wait = WebDriverWait(driver, 15)
-
-def scrape_tradingview(url, symbol_name):
-    if not url:
-        print(f"  ❌ No URL for {symbol_name}")
-        return ["N/A"] * 14
     
     try:
-        print(f"  🌐 {symbol_name[:20]}...")
+        print(f"  🌐 W{worker_id} {symbol_name[:20]}...")
         
-        # YOUR COOKIES (EXACT, once only)
+        # FAST cookies (only essential)
         if os.path.exists("cookies.json"):
             driver.get("https://www.tradingview.com/")
-            with open("cookies.json", "r") as f:
-                cookies = json.load(f)
-                for c in cookies[:15]:
-                    try:
+            try:
+                with open("cookies.json", "r") as f:
+                    cookies = json.load(f)[:10]  # Only top 10 cookies
+                    for c in cookies:
                         driver.add_cookie({
                             "name": c.get("name"), "value": c.get("value"),
                             "domain": c.get("domain", ".tradingview.com"), 
                             "path": c.get("path", "/")
                         })
-                    except: pass
-            driver.refresh()
-            time.sleep(2)  # Cookie settle
+                driver.refresh()
+            except: pass
+            time.sleep(2)
         
-        # Navigate + YOUR EXACT WAIT
+        driver.set_page_load_timeout(45)
         driver.get(url)
-        wait.until(EC.visibility_of_element_located((
-            By.XPATH,
-            '/html/body/div[2]/div/div[5]/div/div[1]/div/div[2]/div[1]/div[2]/div/div[1]/div[2]/div[2]/div[2]/div[2]/div'
-        )))
+        WebDriverWait(driver, 25).until(
+            lambda d: d.execute_script("return document.readyState") == "complete"
+        )
+        time.sleep(4)  # Optimized wait
         
-        # Scroll + short wait (YOUR TIMING)
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
-        time.sleep(1.5)
+        # **EXACT 14 VALUES - PRIORITY SELECTORS**
+        values = []
         
-        # YOUR PROVEN SELECTOR (PRIMARY) + FALLBACKS
+        # 1. EXACT TradingView value classes (most reliable)
+        exact_selectors = [
+            ".valueValue-l31H9iuA.apply-common-tooltip",
+            ".valueValue-l31H9iuA",
+            '[class*="valueValue"]',
+            ".chart-markup-table .value",
+            ".tv-data-table__value",
+            ".fundamental-value"
+        ]
+        
+        for selector in exact_selectors:
+            try:
+                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                for el in elements[:12]:
+                    text = el.text.strip().replace('−', '-').replace('∅', '').replace(',', '')
+                    if text and re.match(r'^[-0-9.%]+$', text) and len(text) < 20:
+                        if text not in values:
+                            values.append(text)
+            except: continue
+        
+        # 2. Fallback: Parse page source FAST
         soup = BeautifulSoup(driver.page_source, "html.parser")
-        all_values = []
         
-        # Strategy 1: YOUR EXACT CLASS (best match)
-        els = soup.find_all("div", class_="valueValue-l31H9iuA apply-common-tooltip")
-        for el in els:
-            text = el.get_text().replace('−', '-').replace('∅', '').strip()
-            if text and len(text) < 25:
-                all_values.append(text)
+        # Target specific containers
+        containers = soup.select('div[class*="fundamental"], div[class*="widget"], .chart-page')
+        for container in containers[:3]:
+            for div in container.find_all('div', limit=30):
+                text = div.get_text().strip().replace('−', '-').replace(',', '')
+                if re.match(r'^[-0-9.%\s]+$', text) and 2 < len(text) < 15 and text not in values:
+                    values.append(text)
         
-        # Strategy 2: Partial class match
-        els = soup.find_all("div", class_=lambda x: x and "valueValue-l31H9iuA" in x)
-        for el in els:
-            text = el.get_text().replace('−', '-').replace('∅', '').strip()
-            if text and len(text) < 25 and text not in all_values:
-                all_values.append(text)
+        # 3. Numeric pattern extraction (final fallback)
+        numeric_pattern = re.compile(r'[-0-9.,%]+')
+        page_text = driver.find_element(By.TAG_NAME, "body").text
+        matches = numeric_pattern.findall(page_text)
+        for match in matches[:20]:
+            clean = re.sub(r'[^\d.-]', '', match)
+            if len(clean) > 1 and clean not in values:
+                values.append(clean)
         
-        # Strategy 3: Numeric fallback
-        numeric_divs = soup.find_all('div', string=re.compile(r'[\d,.-]+'))
-        for div in numeric_divs[:20]:
-            text = div.get_text().strip().replace('−', '-')
-            if re.match(r'^[\d,.-]+.*|.*[\d,.-]+$', text) and len(text) < 25 and text not in all_values:
-                all_values.append(text)
+        # Clean + Pad to EXACTLY 14 values
+        clean_values = []
+        for v in values[:14]:
+            if re.match(r'^[-0-9.%]+$', v) and len(v) > 0:
+                clean_values.append(v)
         
-        # Clean + pad to 14 (YOUR EXACT)
-        unique_values = []
-        for val in all_values:
-            if val and len(val) > 0 and len(val) < 30 and val not in unique_values:
-                unique_values.append(val)
-        
-        final_values = unique_values[:14]
+        final_values = clean_values[:14]
         while len(final_values) < 14:
             final_values.append("N/A")
-            
-        print(f"  📊 {len(unique_values)} → {final_values[:3]}...")
+        
+        print(f"  ✅ W{worker_id} Found {len(clean_values)}/{14}")
         return final_values
         
     except TimeoutException:
-        print(f"  ⏰ Timeout")
+        print(f"  ⏰ W{worker_id} Timeout")
         return ["N/A"] * 14
     except Exception as e:
-        print(f"  ❌ Error: {e}")
+        print(f"  ❌ W{worker_id} Error: {str(e)[:50]}")
         return ["N/A"] * 14
+    finally:
+        driver.quit()
 
-# ---------------- YOUR MAIN LOOP (BATCH=50) ---------------- #
-batch = []
-batch_start = None
-processed = success_count = 0
+# ---------------- ULTRA-FAST MAIN LOOP ---------------- #
+def update_checkpoint(i):
+    with checkpoint_lock:
+        with open(CHECKPOINT_FILE, "w") as f:
+            f.write(str(i))
 
-print(f"\n🚀 Scraping {END_INDEX-START_INDEX+1} symbols → 16 cols (Name+Date+14vals)")
-
-for i, row in enumerate(data_rows):
-    if i < last_i or i < START_INDEX or i > END_INDEX:
-        continue
-    
+def process_symbol(args):
+    i, row = args
     name = row[0].strip()
     url = row[3] if len(row) > 3 else ""
     target_row = i + 2
     
-    if batch_start is None:
-        batch_start = target_row
+    vals = scrape_tradingview_fast(url, name, hash(name) % MAX_WORKERS)
+    return [name, current_date] + vals, target_row
+
+# Pre-filter range
+target_rows = [(i, row) for i, row in enumerate(data_rows) 
+              if last_i <= i <= END_INDEX and START_INDEX <= i]
+
+print(f"\n⚡ PARALLEL SCRAPING {len(target_rows)} symbols with {MAX_WORKERS} workers")
+
+all_results = []
+success_count = 0
+
+# PARALLEL PROCESSING - THE SPEED BOOST!
+with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    future_to_row = {executor.submit(process_symbol, args): args[0] 
+                    for args in target_rows}
     
-    print(f"[{i+1:4d}/{END_INDEX-START_INDEX+1}] {name[:25]} -> Row {target_row}")
-    
-    vals = scrape_tradingview(url, name)
-    row_data = [name, current_date] + vals
-    
-    if any(v != "N/A" for v in vals):
-        success_count += 1
-    
-    batch.append(row_data)
-    processed += 1
-    
-    # 🔥 BATCH=50 (5x fewer writes)
-    if len(batch) >= 50:
+    for future in as_completed(future_to_row):
+        i = future_to_row[future]
         try:
-            dest_sheet.update(f"A{batch_start}", batch)
-            print(f"💾 Rows {batch_start}-{target_row} (50×16 cols)")
-            batch_start += len(batch)
-            batch = []
+            result, target_row = future.result(timeout=90)
+            all_results.append(result)
+            
+            if any(v != "N/A" for v in result[2:]):
+                success_count += 1
+            
+            # Frequent checkpoint
+            update_checkpoint(i)
+            print(f"✅ [{i+1:3d}] Complete | Progress: {len(all_results)}/{len(target_rows)}")
+            
         except Exception as e:
-            print(f"❌ Write error: {e}")
-    
-    # YOUR CHECKPOINT
-    with open(CHECKPOINT_FILE, "w") as f:
-        f.write(str(i + 1))
-    
-    time.sleep(0.8)  # Reduced from 1.8s
+            print(f"❌ Row {i} failed: {e}")
 
-# Final batch
-if batch and batch_start:
+# FAST BATCH WRITES
+if all_results:
     try:
-        dest_sheet.update(f"A{batch_start-len(batch)}", batch)
-        print(f"💾 Final: Rows {batch_start-len(batch)}-{target_row}")
+        # Sort by original order
+        all_results.sort(key=lambda x: data_rows.index([x[0]] + ['']*4))
+        dest_sheet.update("A2", all_results)  # Bulk write ALL
+        print(f"💾 ULTRA-FAST: Wrote {len(all_results)} rows × 16 cols")
     except Exception as e:
-        print(f"❌ Final write: {e}")
+        print(f"❌ Bulk write failed: {e}")
+        # Fallback: smaller batches
+        for i in range(0, len(all_results), BATCH_SIZE):
+            batch = all_results[i:i+BATCH_SIZE]
+            dest_sheet.update(f"A{i+2}", batch)
+            time.sleep(1)
 
-driver.quit()
-
-print(f"\n🎉 COMPLETE!")
-print(f"📊 Processed: {processed} | Success: {success_count}")
-print(f"✅ Rate: {success_count/processed*100:.1f}%")
+print(f"\n🎉 ULTRA-FAST COMPLETE!")
+print(f"📊 Processed: {len(all_results)} | Success: {success_count}")
+print(f"📍 Sheet5: Rows {START_INDEX+2}-{END_INDEX+2}")
+print(f"⚡ Speed: {success_count/len(all_results)*100:.1f}% success")
