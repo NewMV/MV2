@@ -5,3 +5,5 @@ gspread
 oauth2client
 tradingview-screener
 pandas
+
+tradingview-ta
