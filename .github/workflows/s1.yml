@@ -34,14 +34,34 @@ jobs:
       with:
         python-version: '3.11'
         
-    - name: Install Dependencies
+    - name: Install Python Dependencies
       run: |
+        pip install --upgrade pip
         pip install gspread oauth2client selenium beautifulsoup4 webdriver-manager
         
-    - name: Setup Chrome & Dependencies
+    - name: Setup Chrome (Ubuntu 24.04 Fixed)
       run: |
+        # Add Google Chrome repo
+        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+        
+        # Update & install Chrome + deps (Ubuntu 24.04 compatible)
         sudo apt-get update
-        sudo apt-get install -y google-chrome-stable xvfb libnss3 libgconf-2-4 libxss1 libasound2
+        sudo apt-get install -y \
+          google-chrome-stable \
+          xvfb \
+          libnss3 \
+          libatk-bridge2.0-0 \
+          libdrm2 \
+          libxkbcommon0 \
+          libxcomposite1 \
+          libxdamage1 \
+          libxrandr2 \
+          libgbm1 \
+          libasound2t64 \
+          fonts-liberation \
+          libu2f-udev \
+          libvulkan1
         
     - name: Run Fast Scraper
       env:
@@ -50,7 +70,8 @@ jobs:
       run: |
         python run_scraper.py
         
-    - name: Upload Checkpoint & Logs
+    - name: Upload Results
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: scraper-results
@@ -58,10 +79,3 @@ jobs:
           fast_checkpoint.txt
           *.log
         retention-days: 7
-        
-    - name: Success Summary
-      if: success()
-      run: |
-        echo "🎉 ULTRA-FAST SCRAPER COMPLETE!"
-        echo "✅ 500 symbols processed successfully"
-        echo "📊 Check Sheet5 for results"
