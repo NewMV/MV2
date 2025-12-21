@@ -1,6 +1,13 @@
-import os, time, json, gspread
+import os, time, json, gspread, re
 from datetime import date
-from tradingview_ta import TA_Handler, Interval
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
+from webdriver_manager.chrome import ChromeDriverManager
 
 # ---------------- CONFIG ---------------- #
 STOCK_LIST_URL = "https://docs.google.com/spreadsheets/d/1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4/edit?gid=0#gid=0"
@@ -8,7 +15,18 @@ NEW_MV2_URL    = "https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucC
 
 START_INDEX = int(os.getenv("START_INDEX", "0"))
 END_INDEX   = int(os.getenv("END_INDEX", "2500"))
-CHECKPOINT_FILE = "checkpoint.txt"
+CHECKPOINT_FILE = os.getenv("CHECKPOINT_FILE", "checkpoint.txt")
+
+# Resume from checkpoint
+last_i = START_INDEX
+if os.path.exists(CHECKPOINT_FILE):
+    with open(CHECKPOINT_FILE, "r") as f:
+        try:
+            last_i = int(f.read().strip())
+        except:
+            pass
+
+print(f"🔧 Range: {START_INDEX}-{END_INDEX} | Resume: {last_i}")
 
 # ---------------- GOOGLE SHEETS AUTH ---------------- #
 try:
@@ -20,85 +38,129 @@ try:
         
     source_sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
     dest_sheet   = client.open_by_url(NEW_MV2_URL).worksheet("Sheet5")
-    data_rows = source_sheet.get_all_values()[1:] 
-    print("✅ Connected to Sheets")
+    data_rows = source_sheet.get_all_values()[1:]  # Skip header
+    print("✅ Connected. Reading Sheet1, Writing Sheet5")
 except Exception as e:
-    print(f"❌ Connection Error: {e}"); raise
+    print(f"❌ Connection Error: {e}")
+    raise
 
 current_date = date.today().strftime("%m/%d/%Y")
+CHROME_SERVICE = Service(ChromeDriverManager().install())
 
-# ---------------- WEBSOCKET DATA FETCH ---------------- #
-def get_technical_data(symbol):
-    """Explicitly fetches the 14 indicators via WebSocket protocol"""
+# ---------------- UPDATED SCRAPER (WITH DYNAMIC WAIT) ---------------- #
+def scrape_tradingview(url):
+    if not url:
+        return []
+
+    opts = Options()
+    opts.add_argument("--headless=new")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--window-size=1920,1080")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    opts.add_experimental_option("useAutomationExtension", False)
+    opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+
+    driver = webdriver.Chrome(service=CHROME_SERVICE, options=opts)
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
     try:
-        # Note: Change exchange="NASDAQ" and screener="america" for US stocks
-        handler = TA_Handler(
-            symbol=symbol,
-            exchange="NSE",
-            screener="india",
-            interval=Interval.INTERVAL_1_DAY,
-            timeout=None
-        )
-        analysis = handler.get_analysis()
-        ind = analysis.indicators
+        # Cookies Logic
+        if os.path.exists("cookies.json"):
+            driver.get("https://www.tradingview.com/")
+            with open("cookies.json", "r") as f:
+                for c in json.load(f):
+                    try:
+                        driver.add_cookie({
+                            "name": c.get("name"),
+                            "value": c.get("value"),
+                            "domain": c.get("domain", ".tradingview.com"),
+                            "path": c.get("path", "/")
+                        })
+                    except: pass
+            driver.refresh()
 
-        # Exactly mapping the 14 indicators requested
-        return [
-            str(ind.get("close")),        # 1. Price
-            str(ind.get("change")),       # 2. Change Abs
-            str(ind.get("RSI")),          # 3. RSI (14)
-            str(ind.get("Stoch.K")),      # 4. Stochastic %K
-            str(ind.get("CCI")),          # 5. CCI (20)
-            str(ind.get("ADX")),          # 6. ADX (14)
-            str(ind.get("AO")),           # 7. Awesome Oscillator
-            str(ind.get("Mom")),          # 8. Momentum (10)
-            str(ind.get("MACD.macd")),    # 9. MACD Level
-            str(ind.get("Stoch.RSI.K")),  # 10. Stoch RSI
-            str(ind.get("W.R")),          # 11. Williams %R
-            str(ind.get("BBPower")),      # 12. Bull Bear Power
-            str(ind.get("UO")),           # 13. Ultimate Oscillator
-            str(analysis.summary.get("RECOMMENDATION")) # 14. Verdict
-        ]
+        driver.get(url)
+        
+        # --- NECESSARY CHANGE 1: DYNAMIC WAIT ---
+        # Wait until the specific value element is not empty ("")
+        wait = WebDriverWait(driver, 30)
+        target_class = "valueValue-l31H9iuA"
+        wait.until(lambda d: d.find_element(By.CLASS_NAME, target_class).text.strip() != "")
+
+        # --- NECESSARY CHANGE 2: SCROLL TRIGGER ---
+        # Forces TradingView to render the data in the divs
+        driver.execute_script("window.scrollTo(0, 400);")
+        time.sleep(1)
+
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        
+        # --- NECESSARY CHANGE 3: NUMERIC FILTER ---
+        extracted = []
+        elements = soup.find_all("div", class_=target_class)
+        for el in elements:
+            val = el.get_text(strip=True).replace('−', '-').replace('∅', '').replace('+', '')
+            # Only keep values that contain a digit (skip "Strong Buy", etc.)
+            if val and any(char.isdigit() for char in val):
+                if val not in extracted:
+                    extracted.append(val)
+        
+        return extracted
+
     except Exception as e:
-        return ["N/A"] * 14
+        print(f"⚠️ Scrape Fail: {str(e)[:50]}")
+        return []
 
-# ---------------- MAIN LOOP ---------------- #
-last_i = START_INDEX
-if os.path.exists(CHECKPOINT_FILE):
-    with open(CHECKPOINT_FILE, "r") as f:
-        try: last_i = int(f.read().strip())
-        except: pass
+    finally:
+        driver.quit()
 
-batch = []
-batch_start = None
+# ---------------- YOUR PROVEN MAIN LOOP ---------------- #
+batch, batch_start = [], None
 
-print(f"🚀 Processing {START_INDEX} to {END_INDEX} via WebSocket")
+print(f"\n🚀 Processing Rows {START_INDEX+2}-{END_INDEX+2}")
 
 for i, row in enumerate(data_rows):
     if i < last_i or i < START_INDEX or i > END_INDEX:
         continue
 
-    symbol = row[0].strip()
+    name = row[0]
+    url  = row[3] if len(row) > 3 else ""
     target_row = i + 2
-    if batch_start is None: batch_start = target_row
 
-    print(f"🔎 [{i}] {symbol} -> Row {target_row}")
+    if batch_start is None:
+        batch_start = target_row
 
-    vals = get_technical_data(symbol)
-    batch.append([symbol, current_date] + vals)
+    print(f"🔎 [{i}] {name} -> Row {target_row}")
 
-    # Batch Update (Fast: 10 symbols per update)
-    if len(batch) >= 10:
+    vals = scrape_tradingview(url)
+    
+    # Ensure exactly 14 values are returned or filled with N/A
+    final_vals = vals[:14]
+    while len(final_vals) < 14:
+        final_vals.append("N/A")
+        
+    row_data = [name, current_date] + final_vals
+    batch.append(row_data)
+
+    # Batch logic
+    if len(batch) >= 5:
         try:
             dest_sheet.update(f"A{batch_start}", batch)
-            with open(CHECKPOINT_FILE, "w") as f: f.write(str(i + 1))
+            print(f"💾 Saved rows {batch_start} to {target_row}")
             batch, batch_start = [], None
-            time.sleep(1.5) # Prevent Google API rate limit
+            time.sleep(2)
         except Exception as e:
             print(f"❌ Write Error: {e}")
+
+    # Checkpoint
+    with open(CHECKPOINT_FILE, "w") as f:
+        f.write(str(i + 1))
+
+    time.sleep(1)
 
 # Final Flush
 if batch:
     dest_sheet.update(f"A{batch_start}", batch)
 
-print("\n🏁 Process finished successfully.")
+print("\n🏁 Process finished.")
