@@ -9,13 +9,12 @@ dotenv.config();
 puppeteer.use(StealthPlugin());
 
 // ---------------- CONFIG ---------------- //
-const STOCK_LIST_URL =
-  "https://docs.google.com/spreadsheets/d/1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4";
-const NEW_MV2_URL =
-  "https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc";
+// ✅ USE ONLY SHEET IDs (NOT URL)
+const STOCK_LIST_SHEET_ID = "1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4";
+const NEW_MV2_SHEET_ID    = "1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc";
 
 const START_INDEX = parseInt(process.env.START_INDEX || "0");
-const END_INDEX = parseInt(process.env.END_INDEX || "2500");
+const END_INDEX   = parseInt(process.env.END_INDEX || "2500");
 const CHECKPOINT_FILE = "checkpoint.txt";
 
 // ---------------- CHECKPOINT ---------------- //
@@ -37,14 +36,14 @@ const auth = new JWT({
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 
-const srcDoc = new GoogleSpreadsheet(STOCK_LIST_URL, auth);
-const dstDoc = new GoogleSpreadsheet(NEW_MV2_URL, auth);
+const srcDoc = new GoogleSpreadsheet(STOCK_LIST_SHEET_ID, auth);
+const dstDoc = new GoogleSpreadsheet(NEW_MV2_SHEET_ID, auth);
 
 await srcDoc.loadInfo();
 await dstDoc.loadInfo();
 
 const sourceSheet = srcDoc.sheetsByTitle["Sheet1"];
-const destSheet = dstDoc.sheetsByTitle["Sheet5"];
+const destSheet   = dstDoc.sheetsByTitle["Sheet5"];
 
 const rows = await sourceSheet.getRows();
 console.log("✅ Google Sheets connected");
@@ -71,40 +70,33 @@ async function scrapeTradingView(url, name) {
   );
 
   try {
-    // Load cookies
     if (fs.existsSync("cookies.json")) {
       const cookies = JSON.parse(fs.readFileSync("cookies.json"));
-      await page.goto("https://www.tradingview.com/", {
-        waitUntil: "domcontentloaded",
-      });
+      await page.goto("https://www.tradingview.com/", { waitUntil: "domcontentloaded" });
       await page.setCookie(...cookies);
       await page.reload({ waitUntil: "networkidle2" });
     }
 
-    await page.goto(url, {
-      waitUntil: "networkidle2",
-      timeout: 60000,
-    });
-
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
     await page.waitForTimeout(6000);
 
-    // 🔥 GET ALL VALUES
     const values = await page.$$eval(
       "div[class*='valueValue']",
-      (els) =>
+      els =>
         els
-          .map((e) =>
+          .map(e =>
             e.innerText
               .replace("−", "-")
               .replace("∅", "")
               .trim()
           )
-          .filter((v) => v.length > 0 && v.length < 50)
+          .filter(v => v.length > 0 && v.length < 50)
     );
 
     const unique = [...new Set(values)];
     console.log(`📊 ${name}: ${unique.length} values`);
     return unique;
+
   } catch (e) {
     console.log(`❌ ${name}: ${e.message}`);
     return [];
@@ -124,14 +116,13 @@ for (let i = 0; i < rows.length; i++) {
   if (i < last_i || i < START_INDEX || i > END_INDEX) continue;
 
   const name = rows[i].get("Name");
-  const url = rows[i].get("URL");
+  const url  = rows[i].get("URL");
 
   console.log(`🔎 [${i}] ${name}`);
 
   const values = await scrapeTradingView(url, name);
   if (values.length) success++;
 
-  // ✅ Store ALL values safely in ONE column
   batch.push({
     Name: name,
     Date: new Date().toLocaleDateString("en-US"),
@@ -144,11 +135,11 @@ for (let i = 0; i < rows.length; i++) {
     await destSheet.addRows(batch);
     console.log(`💾 Saved ${batch.length} rows`);
     batch = [];
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 2000));
   }
 
   fs.writeFileSync(CHECKPOINT_FILE, String(i + 1));
-  await new Promise((r) => setTimeout(r, 1800));
+  await new Promise(r => setTimeout(r, 1800));
 }
 
 // Final flush
