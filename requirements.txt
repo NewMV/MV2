@@ -1,3 +1,7 @@
-scraper.js
-cookies.json
-package.json
+selenium
+webdriver-manager
+beautifulsoup4
+gspread
+oauth2client
+tradingview-screener
+pandas
