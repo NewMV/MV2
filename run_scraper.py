@@ -1,68 +1,93 @@
-import os, time, json, gspread, re
+import os, time, json, gspread
 from datetime import date
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from bs4 import BeautifulSoup
-from webdriver_manager.chrome import ChromeDriverManager
+from tradingview_ta import TA_Handler, Interval, Exchange
 
-# ... (Keep your Auth and Config sections same) ...
+# ---------------- CONFIG ---------------- #
+STOCK_LIST_URL = "https://docs.google.com/spreadsheets/d/1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4/edit?gid=0#gid=0"
+NEW_MV2_URL    = "https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc/edit?gid=0#gid=0"
 
-def scrape_tradingview(url, symbol_name):
-    if not url: return ["No URL"] * 14
-    
-    opts = Options()
-    opts.add_argument("--headless=new")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--window-size=1920,1080")
-    # Added a more recent User-Agent to prevent GitHub Runner detection
-    opts.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-    
-    driver = webdriver.Chrome(service=CHROME_SERVICE, options=opts)
-    
+START_INDEX = int(os.getenv("START_INDEX", "0"))
+END_INDEX   = int(os.getenv("END_INDEX", "2500"))
+CHECKPOINT_FILE = os.getenv("CHECKPOINT_FILE", "checkpoint.txt")
+
+# ---------------- AUTH & CONNECT ---------------- #
+try:
+    creds_json = os.getenv("GSPREAD_CREDENTIALS")
+    client = gspread.service_account_from_dict(json.loads(creds_json)) if creds_json else gspread.service_account(filename="credentials.json")
+    source_sheet = client.open_by_url(STOCK_LIST_URL).worksheet("Sheet1")
+    dest_sheet   = client.open_by_url(NEW_MV2_URL).worksheet("Sheet5")
+    data_rows = source_sheet.get_all_values()[1:]
+except Exception as e:
+    print(f"❌ Auth Error: {e}"); raise
+
+current_date = date.today().strftime("%m/%d/%Y")
+
+def get_tv_data(symbol):
+    """Fetches 14 technical values via TradingView WebSocket Protocol"""
     try:
-        driver.get(url)
+        # We assume NSE for Indian stocks, change Exchange.NASDAQ for US
+        handler = TA_Handler(
+            symbol=symbol,
+            exchange="NSE", 
+            screener="india",
+            interval=Interval.INTERVAL_1_DAY
+        )
+        analysis = handler.get_analysis()
         
-        # 1. Wait for the data to actually load (the price element)
-        wait = WebDriverWait(driver, 35)
-        # We wait for the specific container that holds technical values
-        wait.until(EC.presence_of_element_located((By.CLASS_NAME, "valueValue-l31H9iuA")))
-        
-        # 2. Force Render: GitHub runners need extra time for JS to execute
-        driver.execute_script("window.scrollTo(0, 500);")
-        time.sleep(3) 
-        
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        
-        # 3. Targeted extraction: Get all value divs
-        all_vals = soup.find_all("div", class_="valueValue-l31H9iuA")
-        
-        extracted = []
-        for el in all_vals:
-            txt = el.get_text(strip=True).replace('−', '-').replace('∅', '').replace('+', '')
-            
-            # CRITICAL: Only keep text that looks like a number, percentage, or volume (K/M/B)
-            # This prevents labels like "Neutral" or "Buy" from shifting your columns
-            if txt and (any(char.isdigit() for char in txt)):
-                if txt not in extracted: # Deduplicate price if it appears twice
-                    extracted.append(txt)
-
-        # 4. Consistency Check: Pad to exactly 14 columns
-        # If your sheet expects 14 specific technicals, we ensure they align
-        final_list = extracted[:14]
-        while len(final_list) < 14:
-            final_list.append("N/A")
-            
-        return final_list
-
+        # Mapping 14 specific technical indicators
+        osc = analysis.indicators
+        return [
+            str(osc.get("close")),          # 1. Current Price
+            str(osc.get("change")),         # 2. Change
+            str(osc.get("RSI")),            # 3. RSI (14)
+            str(osc.get("Stoch.K")),        # 4. Stochastic %K
+            str(osc.get("CCI")),            # 5. CCI (20)
+            str(osc.get("ADX")),            # 6. ADX (14)
+            str(osc.get("AO")),             # 7. Awesome Oscillator
+            str(osc.get("Mom")),            # 8. Momentum (10)
+            str(osc.get("MACD.macd")),      # 9. MACD Level
+            str(osc.get("Stoch.RSI.K")),    # 10. Stoch RSI
+            str(osc.get("BBPower")),        # 11. Bull Bear Power
+            str(osc.get("EMA10")),          # 12. EMA 10
+            str(osc.get("SMA10")),          # 13. SMA 10
+            analysis.summary.get("RECOMMENDATION") # 14. Overall Verdict
+        ]
     except Exception as e:
-        print(f"❌ {symbol_name} Fail: {str(e)[:40]}")
-        return ["Timeout/Error"] * 14
-    finally:
-        driver.quit()
+        print(f"  ⚠️ Socket Fail for {symbol}: {e}")
+        return ["N/A"] * 14
 
-# ... (Rest of your batch loop) ...
+# ---------------- MAIN LOOP ---------------- #
+last_i = START_INDEX
+if os.path.exists(CHECKPOINT_FILE):
+    with open(CHECKPOINT_FILE, "r") as f:
+        try: last_i = int(f.read().strip())
+        except: pass
+
+batch = []
+batch_start = None
+
+print(f"🚀 WebSocket Processing: Rows {START_INDEX+2} to {END_INDEX+2}")
+
+for i, row in enumerate(data_rows):
+    if i < last_i or i < START_INDEX or i > END_INDEX: continue
+
+    symbol = row[0].strip()
+    if batch_start is None: batch_start = i + 2
+
+    print(f"[{i}] Fetching {symbol}...", end="\r")
+    
+    vals = get_tv_data(symbol)
+    batch.append([symbol, current_date] + vals)
+
+    # Batch save every 10 (Faster since WebSocket is quick)
+    if len(batch) >= 10:
+        dest_sheet.update(f"A{batch_start}", batch)
+        with open(CHECKPOINT_FILE, "w") as f: f.write(str(i + 1))
+        batch, batch_start = [], None
+        time.sleep(1) # Brief pause to respect Google Sheets rate limit
+
+# Final Flush
+if batch:
+    dest_sheet.update(f"A{batch_start}", batch)
+
+print("\n🏁 Process finished via WebSocket.")
