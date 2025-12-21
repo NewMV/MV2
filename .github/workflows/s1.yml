@@ -26,4 +26,4 @@ jobs:
           GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
           START_INDEX: 0
           END_INDEX: 250
-        run: python main.py
+        run: python run_scraper.py
