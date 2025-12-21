@@ -1,0 +1,9 @@
+{
+  "type": "module",
+  "dependencies": {
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "google-spreadsheet": "^4.1.1",
+    "dotenv": "^16.4.5"
+  }
+}
