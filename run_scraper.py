@@ -4,6 +4,7 @@ import json
 import gspread
 import random
 import re
+import pandas as pd
 from datetime import date
 from io import BytesIO
 from selenium import webdriver
