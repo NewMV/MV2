@@ -18,7 +18,7 @@ from selenium.common.exceptions import NoSuchElementException, TimeoutException,
 from bs4 import BeautifulSoup
 from webdriver_manager.chrome import ChromeDriverManager
 
-# ---------------- CONFIGURATION & SHARDING ---------------- #
+# ---------------- 1. CONFIGURATION & SHARDING ---------------- #
 SHARD_INDEX = int(os.getenv("SHARD_INDEX", "0"))
 SHARD_STEP = int(os.getenv("SHARD_STEP", "1"))
 START_INDEX = int(os.getenv("START_INDEX", "0"))
@@ -27,25 +27,31 @@ checkpoint_file = os.getenv("CHECKPOINT_FILE", f"checkpoint_shard_{SHARD_INDEX}.
 
 # Load last processed index safely
 last_i = START_INDEX
-try:
-    if os.path.exists(checkpoint_file):
+if os.path.exists(checkpoint_file):
+    try:
         with open(checkpoint_file, "r") as f:
             content = f.read().strip()
             if content.isdigit():
                 last_i = int(content)
-except Exception as e:
-    print(f"⚠️ Checkpoint read warning: {e}")
+    except Exception as e:
+        print(f"⚠️ Checkpoint warning: {e}")
 
-# ---------------- GOOGLE SHEETS SETUP ---------------- #
+# ---------------- 2. GOOGLE SHEETS AUTHENTICATION ---------------- #
 try:
-    gc = gspread.service_account("credentials.json")
+    # Support for both file-based and environment-based credentials
+    creds_json = os.getenv("GSPREAD_CREDENTIALS")
+    if creds_json:
+        gc = gspread.service_account_from_dict(json.loads(creds_json))
+    else:
+        gc = gspread.service_account("credentials.json")
+    
     dest_sheet = gc.open("New MV2").worksheet("Sheet5")
     print("✅ Connected to Google Sheets: 'New MV2' -> 'Sheet5'")
 except Exception as e:
     print(f"❌ Connection Error: {e}")
     exit(1)
 
-# ---------------- BROWSER SETUP (HEADLESS) ---------------- #
+# ---------------- 3. BROWSER SETUP (STABLE) ---------------- #
 chrome_options = Options()
 chrome_options.add_argument("--headless=new")
 chrome_options.add_argument("--disable-gpu")
@@ -54,56 +60,40 @@ chrome_options.add_argument("--disable-dev-shm-usage")
 chrome_options.add_argument("--window-size=1920,1080")
 chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
-# Single driver instance for speed
+# Using a single driver instance for maximum efficiency
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
 
-# Load cookies if available
-if os.path.exists("cookies.json"):
-    driver.get("https://www.tradingview.com/")
-    try:
-        with open("cookies.json", "r") as f:
-            cookies = json.load(f)
-        for cookie in cookies:
-            try:
-                if 'expiry' in cookie:
-                    cookie['expiry'] = int(cookie['expiry'])
-                driver.add_cookie(cookie)
-            except: pass
-        driver.refresh()
-        time.sleep(2)
-    except:
-        print("⚠️ Cookie loading skipped")
-
-# ---------------- EXTRACTION LOGIC ---------------- #
-def scrape_all_container_values(url):
-    if not url: return []
+# ---------------- 4. DYNAMIC EXTRACTION LOGIC ---------------- #
+def scrape_tradingview_values(url):
+    if not url or not url.startswith("http"):
+        return []
     try:
         driver.get(url)
-        # Target the specific TradingView indicator value class
+        # Dynamic wait for TradingView indicator data
         DATA_CLASS = "valueValue-l31H9iuA"
         WebDriverWait(driver, 60).until(EC.presence_of_element_located((By.CLASS_NAME, DATA_CLASS)))
         
         soup = BeautifulSoup(driver.page_source, "html.parser")
-        # Find every element in the container without a hard limit
+        # Capture ALL values in the container dynamiclly
         found_elements = soup.find_all("div", class_=re.compile(r"valueValue"))
         
-        all_values = []
+        all_vals = []
         for el in found_elements:
-            text = el.get_text(strip=True).replace('−', '-').replace('∅', '')
-            # Filter for indicator values and price data
-            if text and len(text) < 25: 
-                all_values.append(text)
+            val_text = el.get_text(strip=True).replace('−', '-').replace('∅', '')
+            if val_text and len(val_text) < 25: 
+                all_vals.append(val_text)
         
-        # Deduplicate while preserving order
-        return list(dict.fromkeys(all_values))
+        # Deduplicate while maintaining sequence
+        return list(dict.fromkeys(all_vals))
     except Exception as e:
-        print(f"  ⚠️ Scrape Error: {e}")
+        print(f"  ⚠️ Scrape warning for {url}: {e}")
         return []
 
-# ---------------- MAIN BATCH PROCESSING ---------------- #
-print(f"🚀 Starting Shard {SHARD_INDEX} from index {last_i} to {END_INDEX}")
+# ---------------- 5. EXECUTION LOOP ---------------- #
+print(f"🚀 Shard {SHARD_INDEX} starting at index {last_i}")
 
 try:
+    # Fetch stock list from GitHub
     EXCEL_URL = "https://raw.githubusercontent.com/NewMV/MV2/main/Stock%20List%20.xlsx"
     response = requests.get(EXCEL_URL)
     response.raise_for_status()
@@ -112,37 +102,35 @@ try:
     url_list = df.iloc[:, 3].fillna("").tolist()
     print(f"✅ Loaded {len(url_list)} stocks.")
 except Exception as e:
-    print(f"❌ FATAL: Could not load stock list: {e}")
+    print(f"❌ Excel Loading Error: {e}")
     driver.quit()
     exit(1)
 
-current_date = date.today().strftime("%m/%d/%Y")
+curr_date = date.today().strftime("%m/%d/%Y")
 
-# Iterate through the range based on SHARD settings
 for i in range(last_i, len(url_list)):
     if i > END_INDEX: break
     if i % SHARD_STEP != SHARD_INDEX: continue
     
-    name = str(name_list[i])
-    url = str(url_list[i])
-    print(f"[{i}] Processing: {name}")
+    symbol = str(name_list[i])
+    target_url = str(url_list[i])
+    print(f"[{i}] Scraping: {symbol}")
     
-    scraped_vals = scrape_all_container_values(url)
+    scraped_data = scrape_tradingview_values(target_url)
     
-    # Structure: [Symbol, Date, Spacer] + All Scraped Values
-    row_to_append = [name, current_date, ""] + scraped_vals
+    # Structure: [Symbol, Date, Spacer] + All Found Values
+    final_row = [symbol, curr_date, ""] + scraped_data
     
     try:
-        # Append row individually to handle dynamic column counts
-        dest_sheet.append_row(row_to_append)
-        # Update progress
+        dest_sheet.append_row(final_row)
+        # Update checkpoint
         with open(checkpoint_file, "w") as f: 
             f.write(str(i))
     except Exception as e:
         print(f"  ❌ GSheet Error: {e}")
     
-    # Jittered sleep to avoid detection
-    time.sleep(2 + random.random() * 2)
+    # Randomized sleep to mimic human behavior
+    time.sleep(3 + random.random() * 2)
 
 driver.quit()
-print("🎉 Shard Complete.")
+print("🎉 Process Finished.")
