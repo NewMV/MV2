@@ -8,32 +8,29 @@ import { JWT } from "google-auth-library";
 dotenv.config();
 puppeteer.use(StealthPlugin());
 
-// ---------------- CONFIG ---------------- //
-// ✅ USE ONLY SHEET IDs (NOT URL)
+// -------- CONFIG -------- //
 const STOCK_LIST_SHEET_ID = "1V8DsH-R3vdUbXqDKZYWHk_8T0VRjqTEVyj7PhlIDtG4";
-const NEW_MV2_SHEET_ID    = "1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc";
+const NEW_MV2_SHEET_ID = "1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc";
 
-const START_INDEX = parseInt(process.env.START_INDEX || "0");
-const END_INDEX   = parseInt(process.env.END_INDEX || "2500");
+const START_INDEX = Number(process.env.START_INDEX || 0);
+const END_INDEX = Number(process.env.END_INDEX || 2500);
 const CHECKPOINT_FILE = "checkpoint.txt";
 
-// ---------------- CHECKPOINT ---------------- //
-let last_i = START_INDEX;
+// -------- CHECKPOINT -------- //
+let lastIndex = START_INDEX;
 if (fs.existsSync(CHECKPOINT_FILE)) {
-  try {
-    last_i = parseInt(fs.readFileSync(CHECKPOINT_FILE, "utf8"));
-  } catch {}
+  lastIndex = Number(fs.readFileSync(CHECKPOINT_FILE, "utf8")) || START_INDEX;
 }
 
-console.log(`🔧 Range ${START_INDEX}-${END_INDEX} | Resume ${last_i}`);
+console.log(`🔧 Range ${START_INDEX}-${END_INDEX} | Resume ${lastIndex}`);
 
-// ---------------- GOOGLE SHEETS AUTH ---------------- //
+// -------- GOOGLE AUTH -------- //
 const creds = JSON.parse(process.env.GSPREAD_CREDENTIALS);
 
 const auth = new JWT({
   email: creds.client_email,
   key: creds.private_key,
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"]
 });
 
 const srcDoc = new GoogleSpreadsheet(STOCK_LIST_SHEET_ID, auth);
@@ -42,112 +39,73 @@ const dstDoc = new GoogleSpreadsheet(NEW_MV2_SHEET_ID, auth);
 await srcDoc.loadInfo();
 await dstDoc.loadInfo();
 
-const sourceSheet = srcDoc.sheetsByTitle["Sheet1"];
-const destSheet   = dstDoc.sheetsByTitle["Sheet5"];
+const sourceSheet = srcDoc.sheetsByIndex[0];
+const destSheet = dstDoc.sheetsByIndex[4];
 
 const rows = await sourceSheet.getRows();
 console.log("✅ Google Sheets connected");
 
-// ---------------- BROWSER ---------------- //
+// -------- BROWSER -------- //
 const browser = await puppeteer.launch({
   headless: "new",
   args: [
     "--no-sandbox",
     "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
-    "--disable-blink-features=AutomationControlled",
-    "--window-size=1920,1080",
-  ],
+    "--disable-blink-features=AutomationControlled"
+  ]
 });
 
-// ---------------- SCRAPER ---------------- //
-async function scrapeTradingView(url, name) {
+// -------- SCRAPER -------- //
+async function scrapeTradingView(url) {
   if (!url) return [];
 
   const page = await browser.newPage();
-  await page.setUserAgent(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-  );
-
   try {
-    if (fs.existsSync("cookies.json")) {
-      const cookies = JSON.parse(fs.readFileSync("cookies.json"));
-      await page.goto("https://www.tradingview.com/", { waitUntil: "domcontentloaded" });
-      await page.setCookie(...cookies);
-      await page.reload({ waitUntil: "networkidle2" });
-    }
-
     await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
-    await page.waitForTimeout(6000);
+    await page.waitForTimeout(5000);
 
     const values = await page.$$eval(
       "div[class*='valueValue']",
-      els =>
-        els
-          .map(e =>
-            e.innerText
-              .replace("−", "-")
-              .replace("∅", "")
-              .trim()
-          )
-          .filter(v => v.length > 0 && v.length < 50)
+      els => [...new Set(els.map(e => e.innerText.trim()).filter(Boolean))]
     );
 
-    const unique = [...new Set(values)];
-    console.log(`📊 ${name}: ${unique.length} values`);
-    return unique;
-
-  } catch (e) {
-    console.log(`❌ ${name}: ${e.message}`);
+    return values;
+  } catch {
     return [];
   } finally {
     await page.close();
   }
 }
 
-// ---------------- MAIN LOOP ---------------- //
-let batch = [];
-let processed = 0;
-let success = 0;
+// -------- MAIN LOOP -------- //
+let buffer = [];
 
-console.log("🚀 Scraping started");
-
-for (let i = 0; i < rows.length; i++) {
-  if (i < last_i || i < START_INDEX || i > END_INDEX) continue;
-
+for (let i = lastIndex; i < rows.length && i <= END_INDEX; i++) {
   const name = rows[i].get("Name");
-  const url  = rows[i].get("URL");
+  const url = rows[i].get("URL");
 
-  console.log(`🔎 [${i}] ${name}`);
+  console.log(`🔎 ${i}: ${name}`);
+  const values = await scrapeTradingView(url);
 
-  const values = await scrapeTradingView(url, name);
-  if (values.length) success++;
-
-  batch.push({
+  buffer.push({
     Name: name,
-    Date: new Date().toLocaleDateString("en-US"),
-    Values: values.join(", "),
+    Date: new Date().toISOString().slice(0, 10),
+    Values: values.join(", ")
   });
 
-  processed++;
-
-  if (batch.length >= 5) {
-    await destSheet.addRows(batch);
-    console.log(`💾 Saved ${batch.length} rows`);
-    batch = [];
-    await new Promise(r => setTimeout(r, 2000));
+  if (buffer.length >= 5) {
+    await destSheet.addRows(buffer);
+    buffer = [];
   }
 
   fs.writeFileSync(CHECKPOINT_FILE, String(i + 1));
-  await new Promise(r => setTimeout(r, 1800));
+  await new Promise(r => setTimeout(r, 2000));
 }
 
-// Final flush
-if (batch.length) {
-  await destSheet.addRows(batch);
+if (buffer.length) {
+  await destSheet.addRows(buffer);
 }
 
 await browser.close();
-
 console.log("🏁 DONE");
-console.log(`📊 Processed: ${processed} | Success: ${success}`);
