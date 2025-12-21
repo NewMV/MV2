@@ -1,8 +1,5 @@
-name: TradingView Chunk 0 (0-249)
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 7 * * 2'
+name: TradingView Chunk 6 (1500-1749)
+on: { workflow_dispatch: {} }
 jobs:
   scrape:
     runs-on: ubuntu-latest
@@ -18,8 +15,8 @@ jobs:
         echo '${{ secrets.TRADINGVIEW_COOKIES }}' > cookies.json
     - run: python run_scraper.py
       env:
-        START_INDEX: 0
-        END_INDEX: 249
-        SHARD_INDEX: 0
+        START_INDEX: 1500
+        END_INDEX: 1749
+        SHARD_INDEX: 6
         SHARD_STEP: 10
-        CHECKPOINT_FILE: checkpoint_chunk0.txt
+        CHECKPOINT_FILE: checkpoint_chunk6.txt
