@@ -1,42 +1,39 @@
-name: TradingView Puppeteer Scraper
+name: TradingView Scraper
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "30 1 * * *"   # Runs daily at 07:00 IST
+    - cron: '0 0 * * *' # Daily at midnight
+  workflow_dispatch: # Manual button
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-
+    permissions:
+      contents: write
     steps:
-      - name: 📥 Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 🟢 Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
+          cache: 'npm'
 
-      - name: 📦 Install dependencies
-        run: |
-          npm install
+      - name: Install dependencies
+        run: npm install
 
-      - name: 🧠 Create cookies.json
-        run: |
-          echo '${{ secrets.TRADINGVIEW_COOKIES }}' > cookies.json
-
-      - name: 🚀 Run TradingView Scraper
+      - name: Run Script
         env:
           GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-          START_INDEX: "0"
-          END_INDEX: "2500"
-        run: |
-          node run_scraper.js
+          START_INDEX: 0
+          END_INDEX: 2500
+        run: node index.js
 
-      - name: 💾 Upload checkpoint (optional)
-        uses: actions/upload-artifact@v4
-        with:
-          name: checkpoint
-          path: checkpoint.txt
+      - name: Commit Checkpoint
+        run: |
+          git config --global user.name 'github-actions'
+          git config --global user.email 'github-actions@github.com'
+          git add checkpoint.txt
+          git commit -m "Update checkpoint" || echo "No changes"
+          git push
