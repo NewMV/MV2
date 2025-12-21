@@ -1,4 +1,4 @@
-name: 🚀 TradingView 500 Stocks (5 shards → 5 mins)
+name: 🚀 TradingView 500 Stocks (5 shards → 5 mins) ✅ FIXED
 on: workflow_dispatch
 
 jobs:
@@ -6,7 +6,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        shard: [0,1,2,3,4]  # 5 shards × 100 = 500 stocks
+        shard: [0,1,2,3,4]
       max-parallel: 5
     timeout-minutes: 15
     
@@ -19,12 +19,24 @@ jobs:
         python-version: '3.11'
     
     - name: Install dependencies
-      run: |
-        pip install --quiet selenium gspread beautifulsoup4 webdriver-manager lxml
+      run: pip install --quiet selenium gspread beautifulsoup4 webdriver-manager lxml
     
+    - name: Calculate shard range & Run scraper
+      env:
+        SHARD: ${{ matrix.shard }}
+        GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+      run: |
+        START_INDEX=$((SHARD * 100))
+        END_INDEX=$((START_INDEX + 99))
+        if [ $SHARD -eq 4 ]; then END_INDEX=499; fi
+        
+        echo "Shard $SHARD: Rows $((START_INDEX+2))-$((END_INDEX+2)) (Python: $START_INDEX-$END_INDEX)"
+        echo "START_INDEX=$START_INDEX" >> $GITHUB_ENV
+        echo "END_INDEX=$END_INDEX" >> $GITHUB_ENV
+        
     - name: Run OPTIMIZED scraper
       env:
-        START_INDEX: ${{ (matrix.shard * 100) }}
-        END_INDEX: ${{ (matrix.shard * 100) + 99 }}
+        START_INDEX: ${{ env.START_INDEX }}
+        END_INDEX: ${{ env.END_INDEX }}
         GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
       run: python run_scraper.py
