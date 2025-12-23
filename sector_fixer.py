@@ -2,24 +2,18 @@ import os
 import json
 import time
 import gspread
-import google.generativeai as genai
+import random
+from groq import Groq  # <-- Now using Groq
 from datetime import date
 
 # ---------------- CONFIGURATION ---------------- #
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# We keep the name GEMINI_API_KEY as requested so you don't have to change your secrets
+GROQ_API_KEY = os.getenv("GEMINI_API_KEY") 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1GKlzomaK4l_Yh8pzVtzucCogWW5d-ikVeqCxC6gvBuc/edit?gid=0#gid=0"
 WORKSHEET_NAME = "Sheet9"
 
-# 1. Setup Gemini with safety overrides to prevent "AI could not determine" errors
-genai.configure(api_key=GEMINI_API_KEY)
-# Turning off filters as much as possible for factual stock data
-safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-]
-model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_settings)
+# Initialize Groq Client
+client_ai = Groq(api_key=GROQ_API_KEY)
 
 # Setup Google Sheets
 def get_gspread_client():
@@ -29,59 +23,78 @@ def get_gspread_client():
 client = get_gspread_client()
 sheet = client.open_by_url(SHEET_URL).worksheet(WORKSHEET_NAME)
 
-def analyze_sector_with_ai(symbol, sector_b, sector_c):
+def analyze_with_groq(symbol, sector_b, sector_c, max_retries=3):
+    """Uses Groq to judge sectors and generate scope."""
     prompt = f"""
-    Symbol: {symbol}. 
-    Data B: {sector_b}, C: {sector_c}.
-    Task: Pick the broad parent sector (IT, Finance, Metals, etc.) and write a 1-line future scope.
-    Format your response EXACTLY like this:
+    Analyze the Indian company with Symbol: {symbol}.
+    Potential sectors from my list: B: {sector_b}, C: {sector_c}.
+    
+    Tasks:
+    1. Select the most accurate broad parent Sector (e.g., IT, Finance, Metals, Automotive, Mining, Energy). 
+       Do NOT use sub-sectors like "Industrial Minerals".
+    2. Write a 1-line future scope (max 12 words).
+
+    Format output EXACTLY:
     SECTOR: [Sector Name]
     SCOPE: [Description]
     """
-    try:
-        response = model.generate_content(prompt)
-        full_text = response.text
-        
-        # 2. SMART PARSING (Finds labels even if AI adds extra words)
-        sector = "Unknown"
-        scope = "No scope found"
-        
-        for line in full_text.split('\n'):
-            if "SECTOR:" in line.upper():
-                sector = line.split(":", 1)[1].strip()
-            if "SCOPE:" in line.upper():
-                scope = line.split(":", 1)[1].strip()
+    
+    for attempt in range(max_retries):
+        try:
+            # Using llama-3.3-70b for high reasoning quality
+            chat_completion = client_ai.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "You are a factual financial analyst. Provide output only in the requested format."},
+                    {"role": "user", "content": prompt}
+                ],
+                model="llama-3.3-70b-versatile",
+                temperature=0.1, # Low temperature for consistency
+            )
+            
+            res_text = chat_completion.choices[0].message.content
+            sector, scope = "Manual Review", "No scope determined"
+            
+            for line in res_text.split('\n'):
+                if "SECTOR:" in line.upper(): sector = line.split(":", 1)[1].strip()
+                if "SCOPE:" in line.upper(): scope = line.split(":", 1)[1].strip()
                 
-        return sector, scope
-    except Exception as e:
-        print(f"  ❌ AI Error for {symbol}: {e}")
-        return "RETRY NEEDED", "Blocked or API Limit reached"
+            return sector, scope
+            
+        except Exception as e:
+            wait_time = (2 ** attempt) + random.random()
+            print(f"  ⏳ Groq Error for {symbol}: {e}. Retrying in {int(wait_time)}s...")
+            time.sleep(wait_time)
+            
+    return "RETRY LATER", "Limit Reached"
 
-# ---------------- MAIN ---------------- #
+# ---------------- MAIN EXECUTION ---------------- #
 data = sheet.get_all_values()
 rows = data[1:] 
 updates = []
+
+print(f"🚀 Groq AI Validation started for {len(rows)} rows...")
 
 for i, row in enumerate(rows):
     symbol = row[0]
     s_b = row[1] if len(row) > 1 else ""
     s_c = row[2] if len(row) > 2 else ""
     
-    final_sector, future_scope = analyze_sector_with_ai(symbol, s_b, s_c)
+    # Skip if already processed to save tokens
+    if len(row) > 3 and row[3].strip() != "":
+        continue
+
+    final_sector, future_scope = analyze_with_groq(symbol, s_b, s_c)
     row_idx = i + 2
-    updates.append({
-        'range': f'D{row_idx}:E{row_idx}',
-        'values': [[final_sector, future_scope]]
-    })
+    updates.append({'range': f'D{row_idx}:E{row_idx}', 'values': [[final_sector, future_scope]]})
     
     print(f"✅ {symbol} -> {final_sector}")
     
-    # 3. RATE LIMIT PROTECTION: Sleep 3-4 seconds per request for Free Tier
-    time.sleep(4)
+    # Groq is much faster, but we still respect limits (TPM/RPM)
+    time.sleep(1) 
     
-    if len(updates) >= 5:
+    if len(updates) >= 10:
         sheet.batch_update(updates)
         updates = []
 
 if updates: sheet.batch_update(updates)
-print("🏁 Done!")
+print("🏁 DONE")
